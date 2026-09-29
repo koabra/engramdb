@@ -3,7 +3,7 @@
 ## Result
 
 Phase 1 passes its implementation validation on commit
-`5d89116f3b0f604dcf3ab8a9c04db50e344d9764`. The foundation is ready for a
+`e81dfe719006dd9e7fdbde696cebcd60763c7ae3`. The foundation is ready for a
 Phase 2 prototype after the page-size boundary is generalized, but it is not
 yet a production storage engine.
 
@@ -21,18 +21,21 @@ Raw observations, plots, and the full machine description are committed under
 | Area | Executed validation | Result |
 | --- | --- | --- |
 | Static gates | `cargo fmt --check`; Clippy for all targets with warnings denied | Pass |
-| Rust tests | 18 normal tests across storage, branching, recovery, properties, and hazards | Pass |
+| Rust tests | 23 normal tests across storage, branching, recovery, properties, and hazards | Pass |
 | Hazard pointers | Loom model of publish/validate/reclaim interleavings; 4 readers × 10,000 actual loads during 10,000 replacements | Pass |
 | Branch isolation | 64 proptest cases × 32 random fork/write operations (2,048 total) | Pass |
 | Long-haul branches | Release-mode 1,000 durable forks and 1,000 three-way merges | Pass |
 | Crash boundaries | Page-written, data-synced, and partial-metadata boundaries plus 96 deterministic randomized cycles | Pass |
-| Corruption handling | Torn trailing data, committed data/metadata bit corruption, full committed DAG traversal | Pass |
+| Corruption handling | Torn trailing data, non-final torn orphan pages, committed data/metadata bit corruption, metadata-length corruption, full committed DAG traversal | Pass |
 | B+ tree | 250-key split/recovery test, point reads after reopen, hash deduplication, concurrent readers during 100 split-producing commits | Pass |
 | Temporal behavior | assertion-time reads, non-overlapping merge, overlapping conflict, stale transaction rejection | Pass |
+| Ownership/error state | exclusive directory lock; partial metadata write poisons the live engine until reopen | Pass |
 
-Recovery publishes only a metadata root whose pages were synced first.
-Incomplete data or metadata tails are discarded. A checksum failure in a
-complete metadata record is reported rather than silently rolled back.
+Recovery publishes only a metadata root whose pages were synced first. Each
+record carries the committed page-file watermark, so all later orphan pages are
+discarded before the index is rebuilt. Header and payload checksums ensure a
+corrupted length or complete record is reported rather than silently rolled
+back.
 
 ## Measured metrics
 
@@ -47,14 +50,14 @@ append and `sync_data`; branches allocate no tree pages.
 
 | Concurrent requests | Samples | p50 | p95 | Batch wall time |
 | ---: | ---: | ---: | ---: | ---: |
-| 1 | 1 | 167.5 µs | 167.5 µs | 396.4 µs |
-| 10 | 10 | 479.3 µs | 807.3 µs | 1.13 ms |
-| 100 | 100 | 4.14 ms | 7.49 ms | 10.44 ms |
-| 1,000 | 1,000 | 46.49 ms | 88.23 ms | 119.97 ms |
+| 1 | 1 | 179.9 µs | 179.9 µs | 306.0 µs |
+| 10 | 10 | 524.7 µs | 911.4 µs | 1.27 ms |
+| 100 | 100 | 4.64 ms | 8.43 ms | 11.46 ms |
+| 1,000 | 1,000 | 53.24 ms | 96.65 ms | 126.68 ms |
 
 Branch work is O(1) in tree size, but latency is not O(1) in concurrent request
 count: Phase 1 serializes the durable metadata append behind the branch-state
-write lock. The 1,000-request batch completed at approximately 8,336 forks/s.
+write lock. The 1,000-request batch completed at approximately 7,894 forks/s.
 
 ![Branch latency](../metrics/phase1/branch-latency.svg)
 
@@ -66,7 +69,7 @@ Branch setup was excluded from the timed interval.
 
 | Writes | Elapsed | Throughput | Logical bytes | Physical growth | Amplification |
 | ---: | ---: | ---: | ---: | ---: | ---: |
-| 5,000 | 1.0028 s | 4,986.2 ops/s | 5,120,000 | 20,885,000 | 4.079× |
+| 5,000 | 1.0571 s | 4,730.0 ops/s | 5,120,000 | 20,945,000 | 4.091× |
 
 The 4 KiB page granularity accounts for 20,484,096 direct-I/O bytes; metadata
 accounts for the remaining growth. No compaction or group commit is implemented
@@ -100,6 +103,8 @@ p50/p95 plot without altering observations.
   group commit remain necessary for production concurrency.
 - The cache uses CLOCK, not full CLOCK-Pro/LIRS. Reads use an immutable
   `ArcSwap` index and hazard-protected `Arc<Page>` values.
+- The immutable index is a B+ tree, not a Fractal Tree or B-Link tree. CoW roots
+  make old-reader traversal safe, but B-Link sibling traversal is not present.
 - Data pages are fixed at 4 KiB. Phase 2's 64 KiB fused block must be introduced
   through a page-size/layout abstraction before index work relies on this API.
 - Three-way merge supports updates/inserts on direct parent/child or sibling
@@ -110,6 +115,9 @@ p50/p95 plot without altering observations.
 - Fault injection covers durable transaction boundaries and torn tails, but it
   does not kill the process during an in-flight kernel write. A subprocess
   SIGKILL/device fault campaign on real NVMe is still required.
+- An uncertain `io_uring_enter` result deliberately retains its 4 KiB
+  request-owned buffer until process exit to rule out kernel use-after-free;
+  repeated fatal submission errors therefore require process restart.
 - Metrics came from an overlay filesystem on a 4-vCPU VM. The 5,000 workers are
   logical jobs on four threads, not 5,000 simultaneously running OS threads.
 - No PostgreSQL/MongoDB service was available for numeric comparison.
