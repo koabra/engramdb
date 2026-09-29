@@ -728,6 +728,7 @@ fn acquire_directory_lock(directory: &Path) -> Result<File> {
     let path = directory.join("engine.lock");
     let file = OpenOptions::new()
         .create(true)
+        .truncate(false)
         .read(true)
         .write(true)
         .open(&path)?;
