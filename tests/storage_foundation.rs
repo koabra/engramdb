@@ -1,3 +1,4 @@
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use engramdb::{AlignedPage, BufferPool, DirectIo, Engine, TemporalRecord, PAGE_SIZE};
@@ -93,4 +94,56 @@ fn identical_writes_are_content_deduplicated() {
     // Epoch is part of a bitemporal key, so roots differ, but unchanged ancestor
     // pages remain shared and branch creation itself allocated no pages.
     assert!(engine.page_count() <= pages_after_left + 1);
+}
+
+#[test]
+fn readers_remain_consistent_during_copy_on_write_splits() {
+    let directory = tempdir().unwrap();
+    let engine = Arc::new(Engine::open(directory.path()).unwrap());
+    let main = engine.main_branch().id;
+    let done = Arc::new(AtomicBool::new(false));
+    let reads = Arc::new(AtomicUsize::new(0));
+
+    std::thread::scope(|scope| {
+        for _ in 0..4 {
+            let engine = Arc::clone(&engine);
+            let done = Arc::clone(&done);
+            let reads = Arc::clone(&reads);
+            scope.spawn(move || {
+                while !done.load(Ordering::Acquire) {
+                    if let Some(record) = engine.get(main, b"shared-key", 50).unwrap() {
+                        assert_eq!(record.value.len(), 256);
+                    }
+                    reads.fetch_add(1, Ordering::Relaxed);
+                }
+            });
+        }
+        let engine = Arc::clone(&engine);
+        let done = Arc::clone(&done);
+        scope.spawn(move || {
+            for index in 0..100 {
+                let mut transaction = engine.begin(main).unwrap();
+                // The shared key creates new temporal versions while unique
+                // keys force repeated leaf and internal-node splits.
+                transaction
+                    .put(TemporalRecord::new("shared-key", vec![index as u8; 256], 0, 100).unwrap())
+                    .unwrap();
+                transaction
+                    .put(
+                        TemporalRecord::new(
+                            format!("split-{index:04}"),
+                            vec![index as u8; 256],
+                            0,
+                            100,
+                        )
+                        .unwrap(),
+                    )
+                    .unwrap();
+                transaction.commit().unwrap();
+            }
+            done.store(true, Ordering::Release);
+        });
+    });
+    assert!(reads.load(Ordering::Relaxed) > 0);
+    engine.validate().unwrap();
 }
