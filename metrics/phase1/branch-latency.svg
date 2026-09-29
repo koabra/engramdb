@@ -13,29 +13,29 @@
 <line class="grid" x1="865.00" y1="55" x2="865.00" y2="445"/>
 <text x="865.00" y="469" text-anchor="middle" font-size="12">1000</text>
 <line class="grid" x1="90" y1="445.00" x2="865" y2="445.00"/>
-<text x="80" y="449.00" text-anchor="end" font-size="12">105</text>
+<text x="80" y="449.00" text-anchor="end" font-size="12">134</text>
 <line class="grid" x1="90" y1="367.00" x2="865" y2="367.00"/>
-<text x="80" y="371.00" text-anchor="end" font-size="12">425</text>
+<text x="80" y="371.00" text-anchor="end" font-size="12">513</text>
 <line class="grid" x1="90" y1="289.00" x2="865" y2="289.00"/>
-<text x="80" y="293.00" text-anchor="end" font-size="12">1715</text>
+<text x="80" y="293.00" text-anchor="end" font-size="12">1964</text>
 <line class="grid" x1="90" y1="211.00" x2="865" y2="211.00"/>
-<text x="80" y="215.00" text-anchor="end" font-size="12">6918</text>
+<text x="80" y="215.00" text-anchor="end" font-size="12">7522</text>
 <line class="grid" x1="90" y1="133.00" x2="865" y2="133.00"/>
-<text x="80" y="137.00" text-anchor="end" font-size="12">27915</text>
+<text x="80" y="137.00" text-anchor="end" font-size="12">28803</text>
 <line class="grid" x1="90" y1="55.00" x2="865" y2="55.00"/>
-<text x="80" y="59.00" text-anchor="end" font-size="12">112635</text>
-<polyline points="90.00,432.52 348.33,319.69 606.67,233.80 865.00,102.85" fill="none" stroke="#2563eb" stroke-width="2.5" class=""/>
-<circle cx="90.00" cy="432.52" r="3.5" fill="#2563eb"/>
-<circle cx="348.33" cy="319.69" r="3.5" fill="#2563eb"/>
-<circle cx="606.67" cy="233.80" r="3.5" fill="#2563eb"/>
-<circle cx="865.00" cy="102.85" r="3.5" fill="#2563eb"/>
+<text x="80" y="59.00" text-anchor="end" font-size="12">110290</text>
+<polyline points="90.00,432.04 348.33,370.95 606.67,245.74 865.00,105.19" fill="none" stroke="#2563eb" stroke-width="2.5" class=""/>
+<circle cx="90.00" cy="432.04" r="3.5" fill="#2563eb"/>
+<circle cx="348.33" cy="370.95" r="3.5" fill="#2563eb"/>
+<circle cx="606.67" cy="245.74" r="3.5" fill="#2563eb"/>
+<circle cx="865.00" cy="105.19" r="3.5" fill="#2563eb"/>
 <line x1="715" y1="62" x2="745" y2="62" stroke="#2563eb" stroke-width="2.5" class=""/>
 <text x="753" y="66" font-size="12">engramdb p50</text>
-<polyline points="90.00,432.52 348.33,292.70 606.67,201.70 865.00,67.48" fill="none" stroke="#2563eb" stroke-width="2.5" class="p95"/>
-<circle cx="90.00" cy="432.52" r="3.5" fill="#2563eb"/>
-<circle cx="348.33" cy="292.70" r="3.5" fill="#2563eb"/>
-<circle cx="606.67" cy="201.70" r="3.5" fill="#2563eb"/>
-<circle cx="865.00" cy="67.48" r="3.5" fill="#2563eb"/>
+<polyline points="90.00,432.04 348.33,340.66 606.67,211.23 865.00,67.96" fill="none" stroke="#2563eb" stroke-width="2.5" class="p95"/>
+<circle cx="90.00" cy="432.04" r="3.5" fill="#2563eb"/>
+<circle cx="348.33" cy="340.66" r="3.5" fill="#2563eb"/>
+<circle cx="606.67" cy="211.23" r="3.5" fill="#2563eb"/>
+<circle cx="865.00" cy="67.96" r="3.5" fill="#2563eb"/>
 <line x1="715" y1="79" x2="745" y2="79" stroke="#2563eb" stroke-width="2.5" class="p95"/>
 <text x="753" y="83" font-size="12">engramdb p95</text>
 <text x="477.5" y="500" text-anchor="middle" font-size="14">Concurrent requests (log scale)</text>
