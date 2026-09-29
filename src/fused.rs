@@ -347,6 +347,15 @@ impl<'a> FusedBlockView<'a> {
         Ok(view)
     }
 
+    pub(crate) fn trusted(bytes: &'a [u8]) -> Self {
+        debug_assert_eq!(bytes.len(), FUSED_BLOCK_SIZE);
+        Self {
+            bytes,
+            epoch: get_u64(bytes, 12),
+            node_count: get_u32(bytes, 20) as usize,
+        }
+    }
+
     pub fn epoch(self) -> u64 {
         self.epoch
     }
