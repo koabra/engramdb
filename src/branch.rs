@@ -99,14 +99,34 @@ impl Engine {
         fs::create_dir_all(&directory)?;
         let directory_lock = acquire_directory_lock(&directory)?;
         let io = Arc::new(DirectIo::open(directory.join("pages.dat"), 256)?);
-        let store = Arc::new(NodeStore::open(io, 4096)?);
-        let tree = PersistentTree::new(Arc::clone(&store));
         let metadata = MetadataLog::open(directory.join("branches.log"))?;
         sync_directory(&directory)?;
         if let Some(parent) = directory.parent() {
             sync_directory(parent)?;
         }
         let events = metadata.replay()?;
+        let mut committed_length = 0;
+        for event in &events {
+            let length = event.data_length();
+            if length % crate::PAGE_SIZE as u64 != 0 || length < committed_length {
+                return Err(Error::CorruptMetadata {
+                    offset: 0,
+                    reason: "invalid or decreasing data-file watermark".to_owned(),
+                });
+            }
+            committed_length = length;
+        }
+        if io.len() < committed_length {
+            return Err(Error::CorruptPage {
+                offset: io.len(),
+                reason: format!("data file is shorter than committed watermark {committed_length}"),
+            });
+        }
+        if io.len() > committed_length {
+            io.truncate(committed_length)?;
+        }
+        let store = Arc::new(NodeStore::open(io, 4096)?);
+        let tree = PersistentTree::new(Arc::clone(&store));
 
         let mut branches = HashMap::new();
         let mut main = None;
@@ -119,6 +139,7 @@ impl Engine {
                     root,
                     fork_root,
                     epoch: event_epoch,
+                    ..
                 } => {
                     validate_root(&tree, &store, root)?;
                     if let Some(parent_id) = parent {
@@ -153,6 +174,7 @@ impl Engine {
                     id,
                     root,
                     epoch: event_epoch,
+                    ..
                 } => {
                     validate_root(&tree, &store, root)?;
                     let state = branches.get_mut(&id).ok_or(Error::UnknownBranch(id))?;
@@ -166,6 +188,7 @@ impl Engine {
                     source,
                     root,
                     epoch: event_epoch,
+                    ..
                 } => {
                     validate_root(&tree, &store, root)?;
                     if !branches.contains_key(&source) {
@@ -192,6 +215,7 @@ impl Engine {
                 root,
                 fork_root: root,
                 epoch: 0,
+                data_length: store.io().len(),
             };
             metadata.append(&event, false)?;
             main = Some(id);
@@ -265,6 +289,7 @@ impl Engine {
                 root: parent_state.root,
                 fork_root: parent_state.root,
                 epoch: branch.epoch,
+                data_length: self.store.io().len(),
             },
             false,
         )?;
@@ -387,6 +412,7 @@ impl Engine {
                 source,
                 root,
                 epoch: merge_epoch,
+                data_length: self.store.io().len(),
             },
             false,
         )?;
@@ -469,6 +495,7 @@ impl Transaction<'_> {
                 id: self.branch,
                 root,
                 epoch: commit_epoch,
+                data_length: self.engine.store.io().len(),
             },
             fault == FaultPoint::DuringMetadataAppend,
         )?;
@@ -591,18 +618,31 @@ enum MetadataEvent {
         root: NodeRef,
         fork_root: NodeRef,
         epoch: u64,
+        data_length: u64,
     },
     Commit {
         id: Uuid,
         root: NodeRef,
         epoch: u64,
+        data_length: u64,
     },
     Merge {
         target: Uuid,
         source: Uuid,
         root: NodeRef,
         epoch: u64,
+        data_length: u64,
     },
+}
+
+impl MetadataEvent {
+    fn data_length(&self) -> u64 {
+        match self {
+            Self::Create { data_length, .. }
+            | Self::Commit { data_length, .. }
+            | Self::Merge { data_length, .. } => *data_length,
+        }
+    }
 }
 
 struct MetadataLog {
@@ -759,6 +799,7 @@ fn encode_event(event: &MetadataEvent) -> Vec<u8> {
             root,
             fork_root,
             epoch,
+            data_length,
         } => {
             output.push(1);
             output.extend_from_slice(id.as_bytes());
@@ -769,24 +810,33 @@ fn encode_event(event: &MetadataEvent) -> Vec<u8> {
             put_ref(&mut output, *root);
             put_ref(&mut output, *fork_root);
             output.extend_from_slice(&epoch.to_le_bytes());
+            output.extend_from_slice(&data_length.to_le_bytes());
         }
-        MetadataEvent::Commit { id, root, epoch } => {
+        MetadataEvent::Commit {
+            id,
+            root,
+            epoch,
+            data_length,
+        } => {
             output.push(2);
             output.extend_from_slice(id.as_bytes());
             put_ref(&mut output, *root);
             output.extend_from_slice(&epoch.to_le_bytes());
+            output.extend_from_slice(&data_length.to_le_bytes());
         }
         MetadataEvent::Merge {
             target,
             source,
             root,
             epoch,
+            data_length,
         } => {
             output.push(3);
             output.extend_from_slice(target.as_bytes());
             output.extend_from_slice(source.as_bytes());
             put_ref(&mut output, *root);
             output.extend_from_slice(&epoch.to_le_bytes());
+            output.extend_from_slice(&data_length.to_le_bytes());
         }
     }
     output
@@ -812,18 +862,21 @@ fn decode_event(payload: &[u8]) -> Result<MetadataEvent> {
                 root: cursor.reference()?,
                 fork_root: cursor.reference()?,
                 epoch: u64::from_le_bytes(cursor.take::<8>()?),
+                data_length: u64::from_le_bytes(cursor.take::<8>()?),
             }
         }
         2 => MetadataEvent::Commit {
             id: Uuid::from_bytes(cursor.take::<16>()?),
             root: cursor.reference()?,
             epoch: u64::from_le_bytes(cursor.take::<8>()?),
+            data_length: u64::from_le_bytes(cursor.take::<8>()?),
         },
         3 => MetadataEvent::Merge {
             target: Uuid::from_bytes(cursor.take::<16>()?),
             source: Uuid::from_bytes(cursor.take::<16>()?),
             root: cursor.reference()?,
             epoch: u64::from_le_bytes(cursor.take::<8>()?),
+            data_length: u64::from_le_bytes(cursor.take::<8>()?),
         },
         _ => return Err(Error::Invariant("unknown metadata event".to_owned())),
     };

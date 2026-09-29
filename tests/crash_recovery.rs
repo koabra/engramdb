@@ -231,3 +231,64 @@ fn corrupted_metadata_length_is_not_mistaken_for_partial_tail() {
         Err(Error::CorruptMetadata { .. })
     ));
 }
+
+#[test]
+fn committed_watermark_discards_nonfinal_torn_orphan_pages() {
+    let directory = tempdir().unwrap();
+    let main;
+    let committed_length;
+    {
+        let engine = Engine::open(directory.path()).unwrap();
+        main = engine.main_branch().id;
+        let mut stable = engine.begin(main).unwrap();
+        stable
+            .put(TemporalRecord::new("stable", "yes", 0, 10).unwrap())
+            .unwrap();
+        stable.commit().unwrap();
+        committed_length = std::fs::metadata(directory.path().join("pages.dat"))
+            .unwrap()
+            .len();
+
+        let mut interrupted = engine.begin(main).unwrap();
+        for index in 0..50 {
+            interrupted
+                .put(
+                    TemporalRecord::new(
+                        format!("orphan-{index:04}"),
+                        vec![index as u8; 256],
+                        0,
+                        10,
+                    )
+                    .unwrap(),
+                )
+                .unwrap();
+        }
+        assert!(interrupted
+            .commit_with_fault(FaultPoint::AfterDataSync)
+            .is_err());
+    }
+    let pages_path = directory.path().join("pages.dat");
+    let uncommitted_length = std::fs::metadata(&pages_path).unwrap().len();
+    assert!(uncommitted_length >= committed_length + 2 * engramdb::PAGE_SIZE as u64);
+
+    let mut file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&pages_path)
+        .unwrap();
+    file.seek(SeekFrom::Start(committed_length + 64)).unwrap();
+    file.write_all(&[0xff]).unwrap();
+    file.sync_data().unwrap();
+    drop(file);
+
+    let recovered = Engine::open(directory.path()).unwrap();
+    assert_eq!(
+        std::fs::metadata(pages_path).unwrap().len(),
+        committed_length
+    );
+    assert_eq!(
+        recovered.get(main, b"stable", 1).unwrap().unwrap().value,
+        b"yes"
+    );
+    recovered.validate().unwrap();
+}
