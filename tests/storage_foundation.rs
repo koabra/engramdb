@@ -1,7 +1,7 @@
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 
-use engramdb::{AlignedPage, BufferPool, DirectIo, Engine, TemporalRecord, PAGE_SIZE};
+use engramdb::{AlignedPage, BufferPool, DirectIo, Engine, Error, TemporalRecord, PAGE_SIZE};
 use tempfile::tempdir;
 
 #[test]
@@ -146,4 +146,16 @@ fn readers_remain_consistent_during_copy_on_write_splits() {
     });
     assert!(reads.load(Ordering::Relaxed) > 0);
     engine.validate().unwrap();
+}
+
+#[test]
+fn database_directory_has_single_engine_owner() {
+    let directory = tempdir().unwrap();
+    let first = Engine::open(directory.path()).unwrap();
+    assert!(matches!(
+        Engine::open(directory.path()),
+        Err(Error::DatabaseLocked(_))
+    ));
+    drop(first);
+    Engine::open(directory.path()).unwrap();
 }

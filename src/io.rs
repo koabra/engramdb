@@ -91,6 +91,7 @@ pub struct DirectIo {
     path: PathBuf,
     file: File,
     ring: Mutex<IoUring>,
+    next_token: AtomicU64,
     next_offset: AtomicU64,
     read_operations: AtomicU64,
     write_operations: AtomicU64,
@@ -125,6 +126,7 @@ impl DirectIo {
             path: path.to_path_buf(),
             file,
             ring: Mutex::new(ring),
+            next_token: AtomicU64::new(1),
             next_offset: AtomicU64::new(length),
             read_operations: AtomicU64::new(0),
             write_operations: AtomicU64::new(0),
@@ -177,15 +179,26 @@ impl DirectIo {
         if offset % PAGE_SIZE as u64 != 0 {
             return Err(Error::Invariant("unaligned direct write offset".to_owned()));
         }
+        // The SQE owns no buffer reference. Clone into request-owned storage so
+        // callers cannot mutate or drop memory while the kernel can access it.
+        let owned_page = page.clone();
+        let token = self.next_token.fetch_add(1, Ordering::Relaxed);
         let entry = opcode::Write::new(
             types::Fd(self.file.as_raw_fd()),
-            page.as_ptr(),
+            owned_page.as_ptr(),
             PAGE_SIZE as _,
         )
         .offset(offset)
         .build()
-        .user_data(offset);
-        self.submit(entry)?;
+        .user_data(token);
+        if let Err(error) = self.submit(entry, token, PAGE_SIZE as i32) {
+            // A failed io_uring_enter can leave submission state uncertain. The
+            // allocation is intentionally leaked so an eventual kernel access
+            // can never become a use-after-free. The engine treats the error as
+            // fatal for this operation; process restart reclaims the memory.
+            std::mem::forget(owned_page);
+            return Err(error);
+        }
         self.write_operations.fetch_add(1, Ordering::Relaxed);
         self.bytes_written
             .fetch_add(PAGE_SIZE as u64, Ordering::Relaxed);
@@ -202,6 +215,7 @@ impl DirectIo {
             });
         }
         let mut page = AlignedPage::zeroed();
+        let token = self.next_token.fetch_add(1, Ordering::Relaxed);
         let entry = opcode::Read::new(
             types::Fd(self.file.as_raw_fd()),
             page.as_mut_ptr(),
@@ -209,15 +223,24 @@ impl DirectIo {
         )
         .offset(offset)
         .build()
-        .user_data(offset);
-        self.submit(entry)?;
+        .user_data(token);
+        if let Err(error) = self.submit(entry, token, PAGE_SIZE as i32) {
+            // See write_at: retain uncertain request memory for process life.
+            std::mem::forget(page);
+            return Err(error);
+        }
         self.read_operations.fetch_add(1, Ordering::Relaxed);
         self.bytes_read
             .fetch_add(PAGE_SIZE as u64, Ordering::Relaxed);
         Ok(page)
     }
 
-    fn submit(&self, entry: io_uring::squeue::Entry) -> Result<()> {
+    fn submit(
+        &self,
+        entry: io_uring::squeue::Entry,
+        token: u64,
+        expected_result: i32,
+    ) -> Result<()> {
         let mut ring = self.ring.lock();
         // SAFETY: pointers in entries refer to AlignedPage buffers that remain
         // alive until submit_and_wait and completion consumption return.
@@ -226,43 +249,44 @@ impl DirectIo {
                 .push(&entry)
                 .map_err(|_| Error::Invariant("io_uring submission queue is full".to_owned()))?;
         }
-        ring.submit_and_wait(1)?;
-        let completion = ring
-            .completion()
-            .next()
-            .ok_or_else(|| Error::Invariant("io_uring returned no completion".to_owned()))?;
-        let result = completion.result();
-        if result < 0 {
-            return Err(Error::Uring(-result));
+        loop {
+            match ring.submit_and_wait(1) {
+                Ok(_) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(error) => return Err(Error::Io(error)),
+            }
+            loop {
+                let completion = ring
+                    .completion()
+                    .next()
+                    .map(|entry| (entry.user_data(), entry.result()));
+                let Some((completed_token, result)) = completion else {
+                    break;
+                };
+                if completed_token != token {
+                    // Completion for a previously uncertain submission. Its
+                    // request buffer was leaked deliberately and remains valid.
+                    continue;
+                }
+                if result < 0 {
+                    return Err(Error::Uring(-result));
+                }
+                if result != expected_result {
+                    return Err(Error::Invariant(format!(
+                        "unexpected io_uring result: {result}, expected {expected_result}"
+                    )));
+                }
+                return Ok(());
+            }
         }
-        if result as usize != PAGE_SIZE {
-            return Err(Error::Invariant(format!(
-                "short direct I/O: {result} of {PAGE_SIZE} bytes"
-            )));
-        }
-        Ok(())
     }
 
     pub fn sync(&self) -> Result<()> {
+        let token = self.next_token.fetch_add(1, Ordering::Relaxed);
         let entry = opcode::Fsync::new(types::Fd(self.file.as_raw_fd()))
             .build()
-            .user_data(u64::MAX);
-        let mut ring = self.ring.lock();
-        // SAFETY: the fd remains open through completion.
-        unsafe {
-            ring.submission()
-                .push(&entry)
-                .map_err(|_| Error::Invariant("io_uring submission queue is full".to_owned()))?;
-        }
-        ring.submit_and_wait(1)?;
-        let result = ring
-            .completion()
-            .next()
-            .ok_or_else(|| Error::Invariant("io_uring returned no fsync completion".to_owned()))?
-            .result();
-        if result < 0 {
-            return Err(Error::Uring(-result));
-        }
+            .user_data(token);
+        self.submit(entry, token, 0)?;
         self.sync_operations.fetch_add(1, Ordering::Relaxed);
         Ok(())
     }

@@ -3,7 +3,9 @@
 use std::collections::{BTreeMap, HashMap};
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
+use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use parking_lot::{Mutex, RwLock};
@@ -14,7 +16,8 @@ use crate::tree::{Hash, NodeRef, NodeStore, PersistentTree};
 use crate::{Error, Result};
 
 const META_MAGIC: &[u8; 8] = b"ENGMETA1";
-const META_HEADER: usize = 16;
+const META_HEADER: usize = 20;
+const MAX_META_PAYLOAD: usize = 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TemporalRecord {
@@ -83,6 +86,7 @@ struct EngineState {
 
 pub struct Engine {
     directory: PathBuf,
+    _directory_lock: File,
     store: Arc<NodeStore>,
     tree: PersistentTree,
     metadata: MetadataLog,
@@ -93,10 +97,15 @@ impl Engine {
     pub fn open(directory: impl AsRef<Path>) -> Result<Self> {
         let directory = directory.as_ref().to_path_buf();
         fs::create_dir_all(&directory)?;
+        let directory_lock = acquire_directory_lock(&directory)?;
         let io = Arc::new(DirectIo::open(directory.join("pages.dat"), 256)?);
         let store = Arc::new(NodeStore::open(io, 4096)?);
         let tree = PersistentTree::new(Arc::clone(&store));
         let metadata = MetadataLog::open(directory.join("branches.log"))?;
+        sync_directory(&directory)?;
+        if let Some(parent) = directory.parent() {
+            sync_directory(parent)?;
+        }
         let events = metadata.replay()?;
 
         let mut branches = HashMap::new();
@@ -203,6 +212,7 @@ impl Engine {
 
         Ok(Self {
             directory,
+            _directory_lock: directory_lock,
             store,
             tree,
             metadata,
@@ -480,7 +490,7 @@ fn validate_root(tree: &PersistentTree, store: &NodeStore, root: NodeRef) -> Res
             reason: format!("committed root {} is missing", root.hash),
         });
     }
-    tree.entries(root)?;
+    tree.validate(root)?;
     Ok(())
 }
 
@@ -598,6 +608,7 @@ enum MetadataEvent {
 struct MetadataLog {
     path: PathBuf,
     writer: Mutex<File>,
+    healthy: AtomicBool,
 }
 
 impl MetadataLog {
@@ -610,6 +621,7 @@ impl MetadataLog {
         Ok(Self {
             path,
             writer: Mutex::new(writer),
+            healthy: AtomicBool::new(true),
         })
     }
 
@@ -629,8 +641,22 @@ impl MetadataLog {
                     reason: "invalid record magic".to_owned(),
                 });
             }
+            let expected_header_crc =
+                u32::from_le_bytes(bytes[position + 16..position + 20].try_into().unwrap());
+            if crc32fast::hash(&bytes[position..position + 16]) != expected_header_crc {
+                return Err(Error::CorruptMetadata {
+                    offset: position as u64,
+                    reason: "record header CRC32 mismatch".to_owned(),
+                });
+            }
             let length =
                 u32::from_le_bytes(bytes[position + 8..position + 12].try_into().unwrap()) as usize;
+            if length > MAX_META_PAYLOAD {
+                return Err(Error::CorruptMetadata {
+                    offset: position as u64,
+                    reason: "record payload length exceeds limit".to_owned(),
+                });
+            }
             let expected_crc =
                 u32::from_le_bytes(bytes[position + 12..position + 16].try_into().unwrap());
             let end = position
@@ -663,27 +689,64 @@ impl MetadataLog {
             writer.set_len(position as u64)?;
             writer.sync_data()?;
         }
+        self.healthy.store(true, Ordering::Release);
         Ok(events)
     }
 
     fn append(&self, event: &MetadataEvent, partial: bool) -> Result<()> {
+        if !self.healthy.load(Ordering::Acquire) {
+            return Err(Error::MetadataPoisoned);
+        }
         let payload = encode_event(event);
+        debug_assert!(payload.len() <= MAX_META_PAYLOAD);
         let mut record = Vec::with_capacity(META_HEADER + payload.len());
         record.extend_from_slice(META_MAGIC);
         record.extend_from_slice(&(payload.len() as u32).to_le_bytes());
         record.extend_from_slice(&crc32fast::hash(&payload).to_le_bytes());
+        record.extend_from_slice(&crc32fast::hash(&record).to_le_bytes());
         record.extend_from_slice(&payload);
         let mut writer = self.writer.lock();
-        writer.seek(SeekFrom::End(0))?;
-        if partial {
-            writer.write_all(&record[..record.len() / 2])?;
+        let result = (|| {
+            writer.seek(SeekFrom::End(0))?;
+            if partial {
+                writer.write_all(&record[..record.len() / 2])?;
+                writer.sync_data()?;
+                return Ok(());
+            }
+            writer.write_all(&record)?;
             writer.sync_data()?;
-            return Ok(());
+            Ok(())
+        })();
+        if partial || result.is_err() {
+            self.healthy.store(false, Ordering::Release);
         }
-        writer.write_all(&record)?;
-        writer.sync_data()?;
-        Ok(())
+        result
     }
+}
+
+fn acquire_directory_lock(directory: &Path) -> Result<File> {
+    let path = directory.join("engine.lock");
+    let file = OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .open(&path)?;
+    // SAFETY: flock only inspects the valid file descriptor and does not retain
+    // any Rust references. The File is held by Engine for the lock lifetime.
+    let result = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+    if result != 0 {
+        let error = std::io::Error::last_os_error();
+        if error.kind() == std::io::ErrorKind::WouldBlock {
+            return Err(Error::DatabaseLocked(path.display().to_string()));
+        }
+        return Err(Error::Io(error));
+    }
+    Ok(file)
+}
+
+fn sync_directory(directory: &Path) -> Result<()> {
+    File::open(directory)?.sync_all()?;
+    Ok(())
 }
 
 fn encode_event(event: &MetadataEvent) -> Vec<u8> {
