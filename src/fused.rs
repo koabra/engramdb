@@ -144,6 +144,7 @@ fn validate_vector(vector: &[f32]) -> Result<()> {
 pub struct FusedBlockBuilder {
     epoch: u64,
     nodes: Vec<FusedNode>,
+    used: usize,
 }
 
 impl FusedBlockBuilder {
@@ -151,26 +152,27 @@ impl FusedBlockBuilder {
         Self {
             epoch,
             nodes: Vec::new(),
+            used: HEADER_SIZE,
         }
     }
 
     pub fn push(&mut self, node: FusedNode) -> Result<()> {
         if !self.can_fit(&node)? {
-            let mut candidate = self.nodes.clone();
-            candidate.push(node);
             return Err(Error::FusedBlockFull {
-                required: required_size_unchecked(&candidate)?,
+                required: self.used + encoded_node_size(&node)?,
                 available: FUSED_BLOCK_SIZE,
             });
         }
+        self.used += encoded_node_size(&node)?;
         self.nodes.push(node);
         Ok(())
     }
 
     pub fn can_fit(&self, node: &FusedNode) -> Result<bool> {
-        let mut candidate = self.nodes.clone();
-        candidate.push(node.clone());
-        Ok(required_size_unchecked(&candidate)? <= FUSED_BLOCK_SIZE)
+        Ok(self
+            .used
+            .checked_add(encoded_node_size(node)?)
+            .is_some_and(|required| required <= FUSED_BLOCK_SIZE))
     }
 
     pub fn is_empty(&self) -> bool {
@@ -215,6 +217,15 @@ fn required_size_unchecked(nodes: &[FusedNode]) -> Result<usize> {
             .ok_or_else(|| Error::Invariant("block size overflow".to_owned()))?;
     }
     Ok(required)
+}
+
+fn encoded_node_size(node: &FusedNode) -> Result<usize> {
+    validate_vector(&node.vector)?;
+    DIRECTORY_ENTRY_SIZE
+        .checked_add(node.temporal.len() * TEMPORAL_ENTRY_SIZE)
+        .and_then(|size| size.checked_add(node.vector.len()))
+        .and_then(|size| size.checked_add(node.edges.len() * EDGE_ENTRY_SIZE))
+        .ok_or_else(|| Error::Invariant("fused node size overflow".to_owned()))
 }
 
 fn encode_block(epoch: u64, nodes: &[FusedNode]) -> Result<AlignedPage> {
