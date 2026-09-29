@@ -74,6 +74,7 @@ pub struct HybridIndex {
     by_id: HashMap<Hash, usize>,
     hnsw: Hnsw,
     logical_bytes: u64,
+    vector_dimension: Option<usize>,
 }
 
 impl HybridIndex {
@@ -86,6 +87,7 @@ impl HybridIndex {
             by_id: HashMap::new(),
             hnsw: Hnsw::new(DEFAULT_HNSW_M, DEFAULT_EF_SEARCH),
             logical_bytes: 0,
+            vector_dimension: None,
         };
         index.load_blocks()?;
         index.rebuild_hnsw()?;
@@ -98,6 +100,20 @@ impl HybridIndex {
         }
         let mut seen = HashSet::with_capacity(nodes.len());
         for node in &nodes {
+            if self
+                .vector_dimension
+                .is_some_and(|dimension| dimension != node.vector.len())
+                || nodes
+                    .first()
+                    .is_some_and(|first| first.vector.len() != node.vector.len())
+            {
+                return Err(Error::DimensionMismatch {
+                    expected: self
+                        .vector_dimension
+                        .unwrap_or_else(|| nodes[0].vector.len()),
+                    actual: node.vector.len(),
+                });
+            }
             if self.by_id.contains_key(&node.id) || !seen.insert(node.id) {
                 return Err(Error::Invariant(format!(
                     "duplicate fused node id {}",
@@ -293,6 +309,16 @@ impl HybridIndex {
         let view = FusedBlockView::parse(stored.bytes.as_slice(), stored.offset)?;
         for slot in 0..view.len() {
             let node = view.node(slot, stored.offset)?;
+            match self.vector_dimension {
+                Some(dimension) if dimension != node.vector().len() => {
+                    return Err(Error::DimensionMismatch {
+                        expected: dimension,
+                        actual: node.vector().len(),
+                    });
+                }
+                None => self.vector_dimension = Some(node.vector().len()),
+                Some(_) => {}
+            }
             if self.by_id.contains_key(&node.id()) {
                 return Err(Error::Invariant(format!(
                     "duplicate fused node id {} on disk",
@@ -325,8 +351,7 @@ impl HybridIndex {
             .get(index)
             .ok_or_else(|| Error::Invariant("HNSW references an unknown node".to_owned()))?;
         let block = &self.blocks[location.block];
-        FusedBlockView::parse(block.bytes.as_slice(), block.offset)?
-            .node(location.slot, block.offset)
+        FusedBlockView::trusted(block.bytes.as_slice()).node(location.slot, block.offset)
     }
 
     fn rebuild_hnsw(&mut self) -> Result<()> {
