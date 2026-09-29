@@ -47,17 +47,36 @@ fn thousand_randomized_forks_and_merges() {
     let directory = tempdir().unwrap();
     let engine = Engine::open(directory.path()).unwrap();
     let main = engine.main_branch().id;
+    let mut branches = vec![main];
     let mut random = 0x243f6a8885a308d3_u64;
 
-    for _ in 0..1_000 {
+    for step in 0..1_000 {
         random ^= random << 13;
         random ^= random >> 7;
         random ^= random << 17;
-        let child = engine.fork(main).unwrap();
-        // An empty source has no changes. Merge still performs ancestry,
-        // three-way diff, durability, and metadata publication.
-        let outcome = engine.merge(main, child.id).unwrap();
-        assert_eq!(outcome.applied_ranges, 0);
+        let parent = branches[random as usize % branches.len()];
+        let child = engine.fork(parent).unwrap();
+        let expected_changes = if random & 3 == 0 {
+            let mut transaction = engine.begin(child.id).unwrap();
+            transaction
+                .put(
+                    TemporalRecord::new(
+                        format!("longhaul-{step:04}"),
+                        random.to_be_bytes(),
+                        step,
+                        step + 1,
+                    )
+                    .unwrap(),
+                )
+                .unwrap();
+            transaction.commit().unwrap();
+            1
+        } else {
+            0
+        };
+        let outcome = engine.merge(parent, child.id).unwrap();
+        assert_eq!(outcome.applied_ranges, expected_changes);
+        branches.push(child.id);
         if random & 15 == 0 {
             engine.validate().unwrap();
         }
