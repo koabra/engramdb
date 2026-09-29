@@ -11,6 +11,7 @@ use crate::tree::Hash;
 use crate::{Error, Result};
 
 const DEFAULT_HNSW_M: usize = 16;
+const DEFAULT_EF_CONSTRUCTION: usize = 128;
 const DEFAULT_EF_SEARCH: usize = 256;
 const MAX_HNSW_LEVEL: usize = 12;
 
@@ -407,6 +408,7 @@ struct Hnsw {
     max_level: usize,
     m: usize,
     ef_search: usize,
+    ef_construction: usize,
 }
 
 impl Hnsw {
@@ -417,6 +419,7 @@ impl Hnsw {
             max_level: 0,
             m,
             ef_search,
+            ef_construction: DEFAULT_EF_CONSTRUCTION,
         }
     }
 
@@ -436,21 +439,40 @@ impl Hnsw {
             return Ok(());
         }
 
-        for layer in 0..=level {
-            let mut candidates = Vec::new();
-            for candidate in 0..index {
-                if self.nodes[candidate].level >= layer {
-                    candidates.push(Scored {
-                        index: candidate,
-                        score: similarity(index, candidate)?,
-                    });
+        let mut entry = self.entry.expect("non-empty HNSW has entry");
+        let mut entry_score = similarity(index, entry)?;
+        for layer in ((level + 1)..=self.max_level).rev() {
+            loop {
+                let mut improved = false;
+                for neighbor in &self.nodes[entry].neighbors[layer] {
+                    let score = similarity(index, *neighbor)?;
+                    if score > entry_score {
+                        entry = *neighbor;
+                        entry_score = score;
+                        improved = true;
+                    }
+                }
+                if !improved {
+                    break;
                 }
             }
-            candidates.sort_by(|left, right| right.cmp(left));
+        }
+
+        for layer in (0..=level.min(self.max_level)).rev() {
+            let mut candidates = self.search_layer_for_node(
+                entry,
+                index,
+                self.ef_construction,
+                layer,
+                &mut similarity,
+            )?;
             candidates.truncate(self.m);
             self.nodes[index].neighbors[layer] =
                 candidates.iter().map(|candidate| candidate.index).collect();
-            for candidate in candidates {
+            if let Some(best) = candidates.first() {
+                entry = best.index;
+            }
+            for candidate in &candidates {
                 let neighbor = candidate.index;
                 self.nodes[neighbor].neighbors[layer].push(index);
                 if self.nodes[neighbor].neighbors[layer].len() > self.m {
@@ -478,6 +500,53 @@ impl Hnsw {
             self.max_level = level;
         }
         Ok(())
+    }
+
+    fn search_layer_for_node<F>(
+        &self,
+        entry: usize,
+        query: usize,
+        ef: usize,
+        layer: usize,
+        similarity: &mut F,
+    ) -> Result<Vec<Scored>>
+    where
+        F: FnMut(usize, usize) -> Result<f32>,
+    {
+        let initial = Scored {
+            index: entry,
+            score: similarity(query, entry)?,
+        };
+        let mut candidates = BinaryHeap::from([initial]);
+        let mut results = BinaryHeap::from([Reverse(initial)]);
+        let mut visited = HashSet::from([entry]);
+        while let Some(candidate) = candidates.pop() {
+            let worst = results.peek().map(|result| result.0.score).unwrap_or(-1.0);
+            if results.len() >= ef && candidate.score < worst {
+                break;
+            }
+            for neighbor in &self.nodes[candidate.index].neighbors[layer] {
+                if !visited.insert(*neighbor) {
+                    continue;
+                }
+                let scored = Scored {
+                    index: *neighbor,
+                    score: similarity(query, *neighbor)?,
+                };
+                if results.len() < ef
+                    || scored.score > results.peek().expect("non-empty results").0.score
+                {
+                    candidates.push(scored);
+                    results.push(Reverse(scored));
+                    if results.len() > ef {
+                        results.pop();
+                    }
+                }
+            }
+        }
+        let mut output: Vec<Scored> = results.into_iter().map(|result| result.0).collect();
+        output.sort_by(|left, right| right.cmp(left));
+        Ok(output)
     }
 
     fn search<F>(&self, count: usize, mut score: F) -> Result<Vec<Scored>>
