@@ -38,7 +38,6 @@ impl TemporalRecord {
         if valid_from >= valid_to {
             return Err(Error::InvalidInterval);
         }
-        let data_length = store.io().len();
         Ok(Self {
             key: key.into(),
             value: value.into(),
@@ -236,6 +235,7 @@ impl Engine {
             );
         }
 
+        let data_length = store.io().len();
         Ok(Self {
             directory,
             _directory_lock: directory_lock,
