@@ -59,7 +59,7 @@ fn recall(arguments: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     let mut writer = output_writer(&output)?;
     writeln!(
         writer,
-        "dataset,oracle,query,k,intersection,recall,approximate_us,exact_us,nodes,dimensions"
+        "dataset,oracle,query,k,intersection,recall,approximate_us,exact_us,nodes,dimensions,ef_search"
     )?;
     for query_id in 0..queries {
         let vector = generated_vector(query_id * 37 % nodes, dimensions);
@@ -75,7 +75,7 @@ fn recall(arguments: &[String]) -> Result<(), Box<dyn std::error::Error>> {
             .count();
         writeln!(
             writer,
-            "synthetic-clustered,exact-quantized-scan,{query_id},10,{intersection},{:.6},{approximate_us:.3},{exact_us:.3},{nodes},{dimensions}",
+            "synthetic-clustered,exact-quantized-scan,{query_id},10,{intersection},{:.6},{approximate_us:.3},{exact_us:.3},{nodes},{dimensions},256",
             intersection as f64 / 10.0
         )?;
     }
@@ -94,6 +94,7 @@ fn sift_recall(
         .map(|value| value.parse())
         .transpose()?;
     let limit_queries = usize_option(arguments, "--limit-queries", 200)?;
+    let ef_search = usize_option(arguments, "--ef-search", 4096)?;
     let base = read_fvecs(base_path, limit_nodes)?;
     let queries = read_fvecs(&query_path, Some(limit_queries))?;
     let groundtruth = read_ivecs(&groundtruth_path, Some(queries.len()))?;
@@ -146,11 +147,11 @@ fn sift_recall(
     let mut writer = output_writer(output)?;
     writeln!(
         writer,
-        "dataset,oracle,query,k,intersection,recall,approximate_us,exact_us,nodes,dimensions"
+        "dataset,oracle,query,k,intersection,recall,approximate_us,exact_us,nodes,dimensions,ef_search"
     )?;
     for (query_id, vector) in queries.iter().enumerate() {
         let started = Instant::now();
-        let approximate = index.nearest(vector, 10)?;
+        let approximate = index.nearest_with_ef(vector, 10, ef_search)?;
         let approximate_us = started.elapsed().as_secs_f64() * 1_000_000.0;
         let actual: std::collections::HashSet<usize> = approximate
             .iter()
@@ -163,7 +164,7 @@ fn sift_recall(
             .count();
         writeln!(
             writer,
-            "SIFT1M,official-fp32-groundtruth,{query_id},10,{intersection},{:.6},{approximate_us:.3},0.000,{nodes},{dimensions}",
+            "SIFT1M,official-fp32-groundtruth,{query_id},10,{intersection},{:.6},{approximate_us:.3},0.000,{nodes},{dimensions},{ef_search}",
             intersection as f64 / 10.0
         )?;
     }

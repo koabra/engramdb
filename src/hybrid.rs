@@ -165,11 +165,20 @@ impl HybridIndex {
     }
 
     pub fn nearest(&self, vector: &[f32], count: usize) -> Result<Vec<SearchResult>> {
+        self.nearest_with_ef(vector, count, DEFAULT_EF_SEARCH)
+    }
+
+    pub fn nearest_with_ef(
+        &self,
+        vector: &[f32],
+        count: usize,
+        ef_search: usize,
+    ) -> Result<Vec<SearchResult>> {
         if count == 0 || self.locations.is_empty() {
             return Ok(Vec::new());
         }
         let query = QuantizedVector::from_f32(vector)?;
-        let candidates = self.hnsw.search(count, |index| {
+        let candidates = self.hnsw.search(count, ef_search.max(count), |index| {
             self.node(index)
                 .and_then(|node| node.cosine_similarity(&query))
         })?;
@@ -549,7 +558,7 @@ impl Hnsw {
         Ok(output)
     }
 
-    fn search<F>(&self, count: usize, mut score: F) -> Result<Vec<Scored>>
+    fn search<F>(&self, count: usize, ef_search: usize, mut score: F) -> Result<Vec<Scored>>
     where
         F: FnMut(usize) -> Result<f32>,
     {
@@ -576,7 +585,7 @@ impl Hnsw {
                 }
             }
         }
-        self.search_layer(entry, self.ef_search.max(count), 0, score)
+        self.search_layer(entry, ef_search.max(self.ef_search).max(count), 0, score)
             .map(|mut results| {
                 results.truncate(count);
                 results
