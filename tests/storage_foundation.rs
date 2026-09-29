@@ -1,7 +1,11 @@
+use std::io::Write;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 
-use engramdb::{AlignedPage, BufferPool, DirectIo, Engine, Error, TemporalRecord, PAGE_SIZE};
+use engramdb::{
+    AlignedPage, BufferPool, DirectIo, Engine, Error, TemporalRecord, FUSED_BLOCK_LAYOUT,
+    FUSED_BLOCK_SIZE, PAGE_SIZE,
+};
 use tempfile::tempdir;
 
 #[test]
@@ -19,6 +23,34 @@ fn direct_io_round_trip_is_aligned_and_accounted() {
     let stats = io.stats();
     assert_eq!(stats.bytes_written, PAGE_SIZE as u64);
     assert_eq!(stats.bytes_read, PAGE_SIZE as u64);
+}
+
+#[test]
+fn direct_io_supports_independent_64k_block_geometry() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("blocks");
+    let io = DirectIo::open_with_layout(&path, 8, FUSED_BLOCK_LAYOUT).unwrap();
+    let mut block = AlignedPage::zeroed_for(FUSED_BLOCK_LAYOUT);
+    block.as_mut_slice()[..16].copy_from_slice(b"engram-fused-v1!");
+
+    assert_eq!(io.append(&block).unwrap(), 0);
+    assert_eq!(io.append(&block).unwrap(), FUSED_BLOCK_SIZE as u64);
+    io.sync().unwrap();
+    assert_eq!(
+        io.read(FUSED_BLOCK_SIZE as u64).unwrap().as_slice(),
+        block.as_slice()
+    );
+    assert_eq!(io.stats().bytes_written, (FUSED_BLOCK_SIZE * 2) as u64);
+
+    drop(io);
+    std::fs::OpenOptions::new()
+        .append(true)
+        .open(&path)
+        .unwrap()
+        .write_all(&[0x55; 777])
+        .unwrap();
+    let reopened = DirectIo::open_with_layout(&path, 8, FUSED_BLOCK_LAYOUT).unwrap();
+    assert_eq!(reopened.len(), (FUSED_BLOCK_SIZE * 2) as u64);
 }
 
 #[test]
