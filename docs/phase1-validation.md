@@ -3,7 +3,7 @@
 ## Result
 
 Phase 1 passes its implementation validation on commit
-`4db8f33c1cdc3de744db133a6f6dfbd839265c13`. The foundation is ready for a
+`5d89116f3b0f604dcf3ab8a9c04db50e344d9764`. The foundation is ready for a
 Phase 2 prototype after the page-size boundary is generalized, but it is not
 yet a production storage engine.
 
@@ -47,14 +47,14 @@ append and `sync_data`; branches allocate no tree pages.
 
 | Concurrent requests | Samples | p50 | p95 | Batch wall time |
 | ---: | ---: | ---: | ---: | ---: |
-| 1 | 1 | 131.6 µs | 131.6 µs | 239.1 µs |
-| 10 | 10 | 990.4 µs | 1.60 ms | 2.12 ms |
-| 100 | 100 | 4.60 ms | 8.17 ms | 11.07 ms |
-| 1,000 | 1,000 | 47.86 ms | 90.11 ms | 120.49 ms |
+| 1 | 1 | 167.5 µs | 167.5 µs | 396.4 µs |
+| 10 | 10 | 479.3 µs | 807.3 µs | 1.13 ms |
+| 100 | 100 | 4.14 ms | 7.49 ms | 10.44 ms |
+| 1,000 | 1,000 | 46.49 ms | 88.23 ms | 119.97 ms |
 
 Branch work is O(1) in tree size, but latency is not O(1) in concurrent request
 count: Phase 1 serializes the durable metadata append behind the branch-state
-write lock. The 1,000-request batch completed at approximately 8,299 forks/s.
+write lock. The 1,000-request batch completed at approximately 8,336 forks/s.
 
 ![Branch latency](../metrics/phase1/branch-latency.svg)
 
@@ -66,7 +66,7 @@ Branch setup was excluded from the timed interval.
 
 | Writes | Elapsed | Throughput | Logical bytes | Physical growth | Amplification |
 | ---: | ---: | ---: | ---: | ---: | ---: |
-| 5,000 | 1.0827 s | 4,618.1 ops/s | 5,120,000 | 20,885,000 | 4.079× |
+| 5,000 | 1.0028 s | 4,986.2 ops/s | 5,120,000 | 20,885,000 | 4.079× |
 
 The 4 KiB page granularity accounts for 20,484,096 direct-I/O bytes; metadata
 accounts for the remaining growth. No compaction or group commit is implemented
