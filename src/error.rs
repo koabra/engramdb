@@ -13,6 +13,10 @@ pub enum Error {
     CorruptPage { offset: u64, reason: String },
     #[error("metadata log is corrupt at byte {offset}: {reason}")]
     CorruptMetadata { offset: u64, reason: String },
+    #[error("database is already open by another engine: {0}")]
+    DatabaseLocked(String),
+    #[error("metadata log is poisoned after an uncertain write; reopen the engine")]
+    MetadataPoisoned,
     #[error("node payload is too large ({actual} > {maximum} bytes)")]
     NodeTooLarge { actual: usize, maximum: usize },
     #[error("branch {0} does not exist")]

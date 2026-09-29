@@ -162,6 +162,12 @@ struct Inserted {
     split: Option<(Vec<u8>, NodeRef)>,
 }
 
+struct ValidatedSubtree {
+    minimum: Option<Vec<u8>>,
+    maximum: Option<Vec<u8>>,
+    depth: usize,
+}
+
 impl PersistentTree {
     pub fn new(store: Arc<NodeStore>) -> Self {
         Self { store }
@@ -305,6 +311,60 @@ impl PersistentTree {
         let mut output = Vec::new();
         self.collect(root, &mut output)?;
         Ok(output)
+    }
+
+    pub fn validate(&self, root: NodeRef) -> Result<()> {
+        self.validate_subtree(root)?;
+        Ok(())
+    }
+
+    fn validate_subtree(&self, reference: NodeRef) -> Result<ValidatedSubtree> {
+        match self.store.get(reference)? {
+            Node::Leaf(entries) => Ok(ValidatedSubtree {
+                minimum: entries.first().map(|entry| entry.0.clone()),
+                maximum: entries.last().map(|entry| entry.0.clone()),
+                depth: 0,
+            }),
+            Node::Internal {
+                separators,
+                children,
+            } => {
+                let mut validated = Vec::with_capacity(children.len());
+                for child in children {
+                    validated.push(self.validate_subtree(child)?);
+                }
+                let expected_depth = validated[0].depth;
+                if validated.iter().any(|child| child.depth != expected_depth) {
+                    return Err(Error::Invariant(
+                        "B+ tree leaves do not have equal depth".to_owned(),
+                    ));
+                }
+                for index in 1..validated.len() {
+                    let minimum = validated[index].minimum.as_ref().ok_or_else(|| {
+                        Error::Invariant("internal node references an empty subtree".to_owned())
+                    })?;
+                    if minimum != &separators[index - 1] {
+                        return Err(Error::Invariant(
+                            "internal separator does not match right subtree minimum".to_owned(),
+                        ));
+                    }
+                    let previous_maximum =
+                        validated[index - 1].maximum.as_ref().ok_or_else(|| {
+                            Error::Invariant("internal node references an empty subtree".to_owned())
+                        })?;
+                    if previous_maximum >= minimum {
+                        return Err(Error::Invariant(
+                            "adjacent B+ tree child ranges overlap".to_owned(),
+                        ));
+                    }
+                }
+                Ok(ValidatedSubtree {
+                    minimum: validated.first().and_then(|child| child.minimum.clone()),
+                    maximum: validated.last().and_then(|child| child.maximum.clone()),
+                    depth: expected_depth + 1,
+                })
+            }
+        }
     }
 
     fn collect(&self, reference: NodeRef, output: &mut Vec<(Vec<u8>, Vec<u8>)>) -> Result<()> {

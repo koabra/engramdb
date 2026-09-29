@@ -176,3 +176,58 @@ fn committed_page_corruption_is_reported() {
         Err(Error::CorruptPage { .. })
     ));
 }
+
+#[test]
+fn partial_metadata_write_poisons_engine_until_reopen() {
+    let directory = tempdir().unwrap();
+    let engine = Engine::open(directory.path()).unwrap();
+    let main = engine.main_branch().id;
+    let mut transaction = engine.begin(main).unwrap();
+    transaction
+        .put(TemporalRecord::new("uncertain", "value", 0, 10).unwrap())
+        .unwrap();
+    assert!(transaction
+        .commit_with_fault(FaultPoint::DuringMetadataAppend)
+        .is_err());
+    assert!(matches!(engine.fork(main), Err(Error::MetadataPoisoned)));
+    drop(engine);
+
+    let recovered = Engine::open(directory.path()).unwrap();
+    assert!(recovered.get(main, b"uncertain", 1).unwrap().is_none());
+}
+
+#[test]
+fn corrupted_metadata_length_is_not_mistaken_for_partial_tail() {
+    let directory = tempdir().unwrap();
+    {
+        let engine = Engine::open(directory.path()).unwrap();
+        let main = engine.main_branch().id;
+        let mut transaction = engine.begin(main).unwrap();
+        transaction
+            .put(TemporalRecord::new("durable", "yes", 0, 10).unwrap())
+            .unwrap();
+        transaction.commit().unwrap();
+    }
+    let path = directory.path().join("branches.log");
+    let mut file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(path)
+        .unwrap();
+    let mut first_header = [0_u8; 20];
+    file.read_exact(&mut first_header).unwrap();
+    let first_length = u32::from_le_bytes(first_header[8..12].try_into().unwrap()) as u64;
+    let second_length_offset = 20 + first_length + 8;
+    file.seek(SeekFrom::Start(second_length_offset)).unwrap();
+    let mut byte = [0_u8; 1];
+    file.read_exact(&mut byte).unwrap();
+    file.seek(SeekFrom::Start(second_length_offset)).unwrap();
+    file.write_all(&[byte[0] ^ 0x80]).unwrap();
+    file.sync_data().unwrap();
+    drop(file);
+
+    assert!(matches!(
+        Engine::open(directory.path()),
+        Err(Error::CorruptMetadata { .. })
+    ));
+}
