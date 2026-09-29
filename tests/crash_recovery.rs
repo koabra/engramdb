@@ -142,3 +142,37 @@ fn committed_metadata_corruption_is_reported_not_silently_rolled_back() {
         Err(Error::CorruptMetadata { .. })
     ));
 }
+
+#[test]
+fn committed_page_corruption_is_reported() {
+    let directory = tempdir().unwrap();
+    {
+        let engine = Engine::open(directory.path()).unwrap();
+        let main = engine.main_branch().id;
+        let mut transaction = engine.begin(main).unwrap();
+        transaction
+            .put(TemporalRecord::new("durable", "yes", 0, 10).unwrap())
+            .unwrap();
+        transaction.commit().unwrap();
+    }
+    let path = directory.path().join("pages.dat");
+    let mut file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(path)
+        .unwrap();
+    let length = file.metadata().unwrap().len();
+    let payload_offset = length - engramdb::PAGE_SIZE as u64 + 64;
+    file.seek(SeekFrom::Start(payload_offset)).unwrap();
+    let mut byte = [0_u8; 1];
+    file.read_exact(&mut byte).unwrap();
+    file.seek(SeekFrom::Start(payload_offset)).unwrap();
+    file.write_all(&[byte[0] ^ 0xff]).unwrap();
+    file.sync_data().unwrap();
+    drop(file);
+
+    assert!(matches!(
+        Engine::open(directory.path()),
+        Err(Error::CorruptPage { .. })
+    ));
+}

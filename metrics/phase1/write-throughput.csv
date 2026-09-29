@@ -1,0 +1,2 @@
+product,operation,logical_workers,physical_threads,writes,record_bytes,elapsed_s,ops_per_s,logical_bytes,physical_bytes,write_amplification,io_page_bytes
+engramdb,micro_write,5000,4,5000,1024,1.064634,4696.450,5120000,20885000,4.079102,20484096
