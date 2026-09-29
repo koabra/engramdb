@@ -292,3 +292,46 @@ fn committed_watermark_discards_nonfinal_torn_orphan_pages() {
     );
     recovered.validate().unwrap();
 }
+
+#[test]
+fn fork_after_aborted_pages_keeps_previous_committed_watermark() {
+    let directory = tempdir().unwrap();
+    let main;
+    let child;
+    let committed_length;
+    {
+        let engine = Engine::open(directory.path()).unwrap();
+        main = engine.main_branch().id;
+        committed_length = std::fs::metadata(directory.path().join("pages.dat"))
+            .unwrap()
+            .len();
+        let mut interrupted = engine.begin(main).unwrap();
+        for index in 0..30 {
+            interrupted
+                .put(
+                    TemporalRecord::new(
+                        format!("aborted-{index:04}"),
+                        vec![index as u8; 256],
+                        0,
+                        10,
+                    )
+                    .unwrap(),
+                )
+                .unwrap();
+        }
+        assert!(interrupted
+            .commit_with_fault(FaultPoint::AfterPageWrites)
+            .is_err());
+        child = engine.fork(main).unwrap().id;
+    }
+
+    let recovered = Engine::open(directory.path()).unwrap();
+    assert_eq!(recovered.branch(child).unwrap().parent_id, Some(main));
+    assert_eq!(
+        std::fs::metadata(directory.path().join("pages.dat"))
+            .unwrap()
+            .len(),
+        committed_length
+    );
+    assert!(recovered.get(child, b"aborted-0000", 1).unwrap().is_none());
+}

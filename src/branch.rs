@@ -38,6 +38,7 @@ impl TemporalRecord {
         if valid_from >= valid_to {
             return Err(Error::InvalidInterval);
         }
+        let data_length = store.io().len();
         Ok(Self {
             key: key.into(),
             value: value.into(),
@@ -82,6 +83,7 @@ struct EngineState {
     branches: HashMap<Uuid, BranchState>,
     main: Uuid,
     epoch: u64,
+    data_length: u64,
 }
 
 pub struct Engine {
@@ -244,6 +246,7 @@ impl Engine {
                 branches,
                 main: main.expect("non-empty metadata has a root branch"),
                 epoch,
+                data_length,
             }),
         })
     }
@@ -289,7 +292,7 @@ impl Engine {
                 root: parent_state.root,
                 fork_root: parent_state.root,
                 epoch: branch.epoch,
-                data_length: self.store.io().len(),
+                data_length: state.data_length,
             },
             false,
         )?;
@@ -416,6 +419,7 @@ impl Engine {
             },
             false,
         )?;
+        state.data_length = self.store.io().len();
         let target_mut = state.branches.get_mut(&target).unwrap();
         target_mut.root = root;
         target_mut.branch.root_hash = root.hash;
@@ -502,6 +506,7 @@ impl Transaction<'_> {
         if fault == FaultPoint::DuringMetadataAppend {
             return Err(Error::InjectedFault("during metadata append"));
         }
+        state.data_length = self.engine.store.io().len();
         let branch_state = state.branches.get_mut(&self.branch).unwrap();
         branch_state.root = root;
         branch_state.branch.root_hash = root.hash;
