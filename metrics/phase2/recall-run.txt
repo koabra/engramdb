@@ -1,0 +1,6 @@
+final_commit=2e9f0df8af49f6a8f98e23382c7950e46f6c61ca
+dataset_source=https://huggingface.co/datasets/qbo-odp/sift1m
+21f66e2975057b5728ba56de1c825bac4f4d89d596609ae985741c6242631816  /tmp/engramdb-sift1m/sift_base.fvecs
+f7fc9be140accdfd64116c2fa2365ecdb69b8f084970c6b0532db5ff79ac8fdc  /tmp/engramdb-sift1m/sift_query.fvecs
+2b71de0a8d5a83e6a84eec3e23fb8b611d8801dd9b3a6cd62f070ab65ea65f4f  /tmp/engramdb-sift1m/sift_groundtruth.ivecs
+command=cargo run --release --bin phase2_bench -- recall --base sift_base.fvecs --queries-file sift_query.fvecs --groundtruth sift_groundtruth.ivecs --limit-queries 200 --ef-search 4096

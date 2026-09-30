@@ -1,0 +1,2 @@
+product,nodes,dimensions,edges,blocks,source_bytes,encoded_bytes,physical_bytes,physical_vs_source,packing_amplification,elapsed_s,measured
+engramdb,10000000,768,10,192308,35200000000,12480000000,12603097088,0.358043,1.009864,177.028257,true

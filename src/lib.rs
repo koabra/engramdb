@@ -1,13 +1,14 @@
-//! EngramDB Phase 1: a Linux, content-addressed, copy-on-write storage engine.
+//! EngramDB Phase 2: content-addressed storage with fused hybrid indexing.
 //!
 //! The public surface is intentionally small. [`Engine`] owns durable pages and
-//! branch metadata; callers mutate a branch through a [`Transaction`]. Phase 2
-//! indexing and query execution are deliberately out of scope.
+//! branch metadata; callers mutate a branch through a [`Transaction`].
+//! [`HybridIndex`] owns independent 64 KiB vector, graph, and temporal blocks.
+//! General query execution remains out of scope until Phase 3.
 
 #![cfg_attr(not(target_os = "linux"), allow(dead_code))]
 
 #[cfg(not(target_os = "linux"))]
-compile_error!("EngramDB Phase 1 requires Linux io_uring and O_DIRECT");
+compile_error!("EngramDB requires Linux io_uring and O_DIRECT");
 
 mod branch;
 mod buffer_pool;

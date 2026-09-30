@@ -3,7 +3,7 @@ name = "engramdb"
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.85"
-description = "Content-addressable copy-on-write storage foundation for EngramDB"
+description = "Content-addressed storage and fused hybrid indexing for EngramDB"
 license = "Apache-2.0"
 
 [dependencies]

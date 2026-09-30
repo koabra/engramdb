@@ -1,0 +1,3 @@
+layout,iterations,nodes,dimensions,elapsed_ns
+fused,10000,128,256,24276043
+pointer,10000,128,256,16465938
