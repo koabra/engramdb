@@ -1,4 +1,3 @@
-use std::collections::HashSet;
 use std::mem::size_of;
 
 use crate::hybrid::simd::QuantizedVector;
@@ -123,11 +122,6 @@ impl FusedBlockBuilder {
 
     pub fn try_push(&mut self, record: HybridRecord) -> Result<bool> {
         record.validate(self.dimension)?;
-        if self.records.iter().any(|current| current.id == record.id) {
-            return Err(Error::Invariant(
-                "record IDs must be unique within a fused block".to_owned(),
-            ));
-        }
         self.records.push(record);
         if layout_for(&self.records, self.dimension).is_err() {
             let record = self.records.pop().unwrap();
@@ -281,7 +275,7 @@ fn encode_block(
     put_u32(bytes, 44, layout.graph_offsets as u32);
     put_u32(bytes, 48, layout.edges as u32);
     put_u32(bytes, 52, layout.used as u32);
-    let crc = crc32fast::hash(&bytes[FUSED_HEADER_SIZE..layout.used]);
+    let crc = block_crc(bytes, layout.used);
     put_u32(bytes, 20, crc);
     Ok(block)
 }
@@ -342,7 +336,7 @@ impl<'a> FusedBlockView<'a> {
                 "fused-block section offsets are invalid".to_owned(),
             ));
         }
-        if crc32fast::hash(&bytes[FUSED_HEADER_SIZE..header.used]) != get_u32(bytes, 20) {
+        if block_crc(bytes, header.used) != get_u32(bytes, 20) {
             return Err(Error::Invariant("fused-block CRC32 mismatch".to_owned()));
         }
         let edge_count = (header.used - header.edges) / EDGE_SIZE;
@@ -361,11 +355,24 @@ impl<'a> FusedBlockView<'a> {
                 "fused-block CSR does not cover all edges".to_owned(),
             ));
         }
-        let mut ids = HashSet::with_capacity(header.count);
         for slot in 0..header.count {
-            if !ids.insert(get_u64(bytes, header.ids + slot * 8)) {
+            let temporal = header.temporal + slot * TEMPORAL_SIZE;
+            if get_i64(bytes, temporal + 8) >= get_i64(bytes, temporal + 16) {
                 return Err(Error::Invariant(
-                    "fused-block contains duplicate record IDs".to_owned(),
+                    "fused-block contains an invalid temporal interval".to_owned(),
+                ));
+            }
+            let scale = get_f32(bytes, header.vectors + slot * 4);
+            if !scale.is_finite() || scale <= 0.0 {
+                return Err(Error::Invariant(
+                    "fused-block contains an invalid quantization scale".to_owned(),
+                ));
+            }
+        }
+        for edge in 0..edge_count {
+            if !get_f32(bytes, header.edges + edge * EDGE_SIZE + 8).is_finite() {
+                return Err(Error::Invariant(
+                    "fused-block contains a non-finite edge weight".to_owned(),
                 ));
             }
         }
@@ -400,6 +407,14 @@ impl<'a> FusedBlockView<'a> {
             slot,
         })
     }
+}
+
+fn block_crc(bytes: &[u8], used: usize) -> u32 {
+    let mut hasher = crc32fast::Hasher::new();
+    hasher.update(&bytes[..20]);
+    hasher.update(&[0_u8; 4]);
+    hasher.update(&bytes[24..used]);
+    hasher.finalize()
 }
 
 pub struct FusedRecordView<'a> {

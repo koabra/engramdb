@@ -37,7 +37,13 @@ def arguments() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def write(path: Path, product: str, rows: list[tuple[int, float, int]]) -> None:
+def write(
+    path: Path,
+    product: str,
+    rows: list[tuple[int, float, int]],
+    nodes: int,
+    dimension: int,
+) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", newline="", encoding="utf-8") as output:
         writer = csv.writer(output)
@@ -55,7 +61,9 @@ def write(path: Path, product: str, rows: list[tuple[int, float, int]]) -> None:
             ]
         )
         for query, latency, hits in rows:
-            writer.writerow([product, query, f"{latency:.3f}", hits, "", "", "", "", 3])
+            writer.writerow(
+                [product, query, f"{latency:.3f}", hits, "", "", nodes, dimension, 3]
+            )
 
 
 async def postgresql(args: argparse.Namespace) -> list[tuple[int, float, int]]:
@@ -220,7 +228,7 @@ def main() -> None:
     else:
         rows = neo4j_qdrant(args)
         product = "neo4j-qdrant"
-    write(args.output, product, rows)
+    write(args.output, product, rows, args.nodes, args.dimension)
 
 
 if __name__ == "__main__":

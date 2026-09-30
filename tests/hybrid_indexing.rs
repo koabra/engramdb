@@ -1,4 +1,6 @@
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::fs::OpenOptions;
+use std::io::{Seek, SeekFrom, Write};
 use std::mem::size_of;
 
 use engramdb::{
@@ -59,6 +61,17 @@ fn fused_layout_detects_payload_corruption() {
         .unwrap();
     let mut block = builder.finish().unwrap();
     block.as_mut_slice()[FUSED_HEADER_SIZE + 3] ^= 0xff;
+    assert!(FusedBlockView::parse(block.as_slice()).is_err());
+}
+
+#[test]
+fn fused_layout_detects_header_corruption() {
+    let mut builder = FusedBlockBuilder::new(1, 4).unwrap();
+    builder
+        .try_push(record(1, vec![1.0, 2.0, 3.0, 4.0], Vec::new()))
+        .unwrap();
+    let mut block = builder.finish().unwrap();
+    block.as_mut_slice()[26] ^= 0x01;
     assert!(FusedBlockView::parse(block.as_slice()).is_err());
 }
 
@@ -255,6 +268,112 @@ fn hybrid_index_excludes_concurrent_openers() {
         HnswConfig::default(),
     )
     .unwrap();
+}
+
+#[test]
+fn temporal_versions_share_blocks_and_nearest_uses_as_of_snapshot() {
+    let directory = tempdir().unwrap();
+    let mut index = HybridIndex::open(
+        directory.path(),
+        4,
+        DistanceMetric::Cosine,
+        HnswConfig::default(),
+    )
+    .unwrap();
+    let mut old = record(7, vec![1.0, 0.0, 0.0, 0.0], Vec::new());
+    old.assertion_time = 1;
+    let mut current = record(7, vec![0.0, 1.0, 0.0, 0.0], Vec::new());
+    current.assertion_time = 10;
+    index.insert(1, vec![old, current]).unwrap();
+
+    let historical = index.nearest(&[1.0, 0.0, 0.0, 0.0], 1, 5, 5).unwrap();
+    assert_eq!(historical.hits[0].id, 7);
+    assert_eq!(historical.hits[0].assertion_time, 1);
+    assert!(historical.hits[0].similarity > 0.99);
+    let latest = index
+        .nearest(&[0.0, 1.0, 0.0, 0.0], 1, 5, u64::MAX)
+        .unwrap();
+    assert_eq!(latest.hits[0].assertion_time, 10);
+    assert!(latest.hits[0].similarity > 0.99);
+}
+
+#[test]
+fn failed_generation_cannot_leak_into_later_commit() {
+    let directory = tempdir().unwrap();
+    {
+        let mut index = HybridIndex::open(
+            directory.path(),
+            4,
+            DistanceMetric::Cosine,
+            HnswConfig::default(),
+        )
+        .unwrap();
+        index
+            .insert(1, vec![record(1, vec![1.0, 0.0, 0.0, 0.0], Vec::new())])
+            .unwrap();
+        assert!(index
+            .insert_with_fault(
+                2,
+                vec![record(2, vec![0.0, 1.0, 0.0, 0.0], Vec::new())],
+                HybridFaultPoint::AfterBlockWrites,
+            )
+            .is_err());
+        index
+            .insert(3, vec![record(3, vec![0.0, 0.0, 1.0, 0.0], Vec::new())])
+            .unwrap();
+    }
+    let index = HybridIndex::open(
+        directory.path(),
+        4,
+        DistanceMetric::Cosine,
+        HnswConfig::default(),
+    )
+    .unwrap();
+    assert_eq!(index.len(), 2);
+    let ids = index
+        .nearest(&[0.0, 1.0, 0.0, 0.0], 10, 5, u64::MAX)
+        .unwrap()
+        .hits
+        .into_iter()
+        .map(|hit| hit.id)
+        .collect::<HashSet<_>>();
+    assert!(!ids.contains(&2));
+}
+
+#[test]
+fn committed_fused_corruption_is_reported_without_truncation() {
+    let directory = tempdir().unwrap();
+    {
+        let mut index = HybridIndex::open(
+            directory.path(),
+            4,
+            DistanceMetric::Cosine,
+            HnswConfig::default(),
+        )
+        .unwrap();
+        index
+            .insert(1, vec![record(1, vec![1.0, 0.0, 0.0, 0.0], Vec::new())])
+            .unwrap();
+    }
+    let path = directory.path().join("fused.blocks");
+    let original_length = std::fs::metadata(&path).unwrap().len();
+    let mut file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&path)
+        .unwrap();
+    file.seek(SeekFrom::Start(64)).unwrap();
+    file.write_all(&[0xff]).unwrap();
+    file.sync_all().unwrap();
+    drop(file);
+    assert!(HybridIndex::open(
+        directory.path(),
+        4,
+        DistanceMetric::Cosine,
+        HnswConfig::default(),
+    )
+    .is_err());
+    assert_eq!(std::fs::metadata(path).unwrap().len(), original_length);
 }
 
 fn brute_force(
