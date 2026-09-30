@@ -28,8 +28,9 @@ temporal blocks. Query execution remains reserved for Phase 3.
 - `HybridIndex` supports cosine or squared-L2 HNSW search and filtered,
   multi-hop graph traversal. AVX2 and NEON kernels scan quantized vectors
   directly from aligned block memory without constructing `Vec<f32>` values.
-- The fused blocks are durable, while the prototype HNSW graph is rebuilt from
-  block contents on open.
+- Fused blocks and content-addressed HNSW checkpoints are published atomically
+  through branch metadata. Forks share an immutable checkpoint root in O(1),
+  and recovery truncates fused/checkpoint records beyond committed watermarks.
 
 ## Minimal use
 

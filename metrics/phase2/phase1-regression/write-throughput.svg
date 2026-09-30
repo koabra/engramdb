@@ -5,8 +5,8 @@
 <text x="100" y="104" font-size="14">Physical / logical bytes</text>
 <rect x="100" y="125" width="500" height="40" fill="#e5e7eb" rx="4"/>
 <rect x="100" y="125" width="434.78" height="40" fill="#2563eb" rx="4"/>
-<text x="620" y="151" font-size="16" font-weight="600">4.09×</text>
+<text x="620" y="151" font-size="16" font-weight="600">4.11×</text>
 <text x="100" y="220" font-size="14">Sustained committed writes</text>
-<text x="100" y="260" font-size="36" font-weight="600">98.4 ops/s</text>
+<text x="100" y="260" font-size="36" font-weight="600">447.4 ops/s</text>
 <text x="100" y="310" font-size="12" fill="#4b5563">5000 logical workers on 4 physical threads</text>
 </svg>

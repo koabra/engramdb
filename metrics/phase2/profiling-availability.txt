@@ -1,2 +1,2 @@
 perf=unavailable
-cachegrind=unavailable
+cachegrind=available

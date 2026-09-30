@@ -1,4 +1,4 @@
-final_commit=2e9f0df8af49f6a8f98e23382c7950e46f6c61ca
+final_commit=3e0dc8d412b0386c4ddd3744be7cc12c1d39406c
 dataset_source=https://huggingface.co/datasets/qbo-odp/sift1m
 21f66e2975057b5728ba56de1c825bac4f4d89d596609ae985741c6242631816  /tmp/engramdb-sift1m/sift_base.fvecs
 f7fc9be140accdfd64116c2fa2365ecdb69b8f084970c6b0532db5ff79ac8fdc  /tmp/engramdb-sift1m/sift_query.fvecs
