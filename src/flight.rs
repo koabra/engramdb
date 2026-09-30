@@ -85,7 +85,8 @@ impl FlightService for EngramFlightService {
         &self,
         request: Request<Ticket>,
     ) -> std::result::Result<Response<Self::DoGetStream>, Status> {
-        let (session, query) = parse_session_payload(&request.into_inner().ticket)?;
+        let ticket = request.into_inner();
+        let (session, query) = parse_session_payload(&ticket.ticket)?;
         let batch = self
             .sessions
             .query(session, query)
