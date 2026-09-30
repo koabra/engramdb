@@ -274,10 +274,9 @@ fn profile_fused_queries(
         let root = (query_id * 37 % 10_000) as u64;
         let mut query = vec![0_i8; dimension];
         query[root as usize % 32] = 127;
-        let query_norm = 127.0_f32;
         let mut pending = std::collections::VecDeque::from([(root, 0)]);
         let mut visited = HashSet::new();
-        let mut score = 0.0_f32;
+        let mut score = 0_i64;
         while let Some((id, depth)) = pending.pop_front() {
             if depth > 3 || !visited.insert(id) {
                 continue;
@@ -286,12 +285,7 @@ fn profile_fused_queries(
             let view = FusedBlockView::parse_cached(blocks[block].as_slice())?;
             let record = view.record(slot)?;
             let vector = record.quantized_vector();
-            let norm = vector
-                .iter()
-                .map(|value| f32::from(*value).powi(2))
-                .sum::<f32>()
-                .sqrt();
-            score += dot_i8(&query, vector) as f32 / (query_norm * norm);
+            score += dot_i8(&query, vector);
             if depth < 3 {
                 for edge in record.edges() {
                     pending.push_back((edge.target, depth + 1));
