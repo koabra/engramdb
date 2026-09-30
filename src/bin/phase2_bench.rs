@@ -300,6 +300,10 @@ fn amplification(arguments: &[String]) -> Result<(), Box<dyn std::error::Error>>
 fn cache_layout(arguments: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     let output = required_path(arguments, "--output")?;
     let iterations = usize_option(arguments, "--iterations", 10_000)?;
+    let selected_layout = option(arguments, "--layout").unwrap_or_else(|| "both".to_owned());
+    if !matches!(selected_layout.as_str(), "both" | "fused" | "pointer") {
+        return Err("--layout must be one of: both, fused, pointer".into());
+    }
     let dimensions = 256;
     let nodes = 128;
     let records = (0..nodes)
@@ -322,31 +326,40 @@ fn cache_layout(arguments: &[String]) -> Result<(), Box<dyn std::error::Error>> 
         })
         .collect();
 
-    let started = Instant::now();
-    let mut fused_sum = 0_i64;
-    for _ in 0..iterations {
-        for slot in 0..view.len() {
-            fused_sum += dot_i8(view.node(slot, 0)?.vector(), query.codes());
+    let mut rows = Vec::new();
+    let mut checksum = 0_i64;
+    if selected_layout != "pointer" {
+        let started = Instant::now();
+        let mut fused_sum = 0_i64;
+        for _ in 0..iterations {
+            for slot in 0..view.len() {
+                fused_sum += dot_i8(view.node(slot, 0)?.vector(), query.codes());
+            }
         }
+        rows.push(("fused", started.elapsed().as_nanos()));
+        checksum ^= fused_sum;
     }
-    let fused_ns = started.elapsed().as_nanos();
-    let started = Instant::now();
-    let mut pointer_sum = 0_i64;
-    for _ in 0..iterations {
-        for vector in &pointer_vectors {
-            pointer_sum += dot_i8(vector, query.codes());
+    if selected_layout != "fused" {
+        let started = Instant::now();
+        let mut pointer_sum = 0_i64;
+        for _ in 0..iterations {
+            for vector in &pointer_vectors {
+                pointer_sum += dot_i8(vector, query.codes());
+            }
         }
+        rows.push(("pointer", started.elapsed().as_nanos()));
+        checksum ^= pointer_sum;
     }
-    let pointer_ns = started.elapsed().as_nanos();
-    std::hint::black_box((fused_sum, pointer_sum));
+    std::hint::black_box(checksum);
 
     let mut writer = output_writer(&output)?;
     writeln!(writer, "layout,iterations,nodes,dimensions,elapsed_ns")?;
-    writeln!(writer, "fused,{iterations},{nodes},{dimensions},{fused_ns}")?;
-    writeln!(
-        writer,
-        "pointer,{iterations},{nodes},{dimensions},{pointer_ns}"
-    )?;
+    for (layout, elapsed_ns) in rows {
+        writeln!(
+            writer,
+            "{layout},{iterations},{nodes},{dimensions},{elapsed_ns}"
+        )?;
+    }
     Ok(())
 }
 
