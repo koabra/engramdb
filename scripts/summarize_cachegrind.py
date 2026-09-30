@@ -32,9 +32,11 @@ def inclusive_values(path: Path, functions: list[str]) -> list[int]:
 
 
 def normalize_text(path: Path) -> None:
+    lines = [line.rstrip() for line in path.read_text(encoding="utf-8").splitlines()]
+    while lines and not lines[-1]:
+        lines.pop()
     path.write_text(
-        "\n".join(line.rstrip() for line in path.read_text(encoding="utf-8").splitlines())
-        + "\n",
+        "\n".join(lines) + "\n",
         encoding="utf-8",
     )
 
