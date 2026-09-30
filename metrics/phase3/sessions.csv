@@ -1,0 +1,6 @@
+product,sessions,batch_sessions,elapsed_s,rss_bytes,physical_bytes
+engramdb,1,1,0.001240,2965504,4414
+engramdb,10,9,0.003986,2969600,5917
+engramdb,100,90,0.063905,3022848,20947
+engramdb,1000,900,1.135032,3694592,171247
+engramdb,5000,4000,3.459886,5935104,839247

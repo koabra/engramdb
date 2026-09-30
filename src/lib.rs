@@ -1,9 +1,9 @@
-//! EngramDB Phase 2: content-addressed storage with fused hybrid indexing.
+//! EngramDB Phase 3: fused hybrid storage with EnQL and Arrow Flight.
 //!
 //! The public surface is intentionally small. [`Engine`] owns durable pages and
 //! branch metadata; callers mutate a branch through a [`Transaction`].
-//! [`HybridIndex`] owns independent 64 KiB vector, graph, and temporal blocks.
-//! General query execution remains out of scope until Phase 3.
+//! [`HybridIndex`] owns independent 64 KiB vector, graph, and temporal blocks;
+//! [`SessionManager`] provides branch-scoped EnQL execution and Arrow batches.
 
 #![cfg_attr(not(target_os = "linux"), allow(dead_code))]
 
