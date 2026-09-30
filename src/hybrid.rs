@@ -408,10 +408,6 @@ impl HybridIndex {
         Ok(index)
     }
 
-    pub(crate) fn fused_length(&self) -> u64 {
-        self.io.len()
-    }
-
     pub fn get(&self, id: Hash) -> Result<Option<FusedNodeView<'_>>> {
         self.by_id
             .get(&id)
