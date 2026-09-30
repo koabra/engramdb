@@ -305,42 +305,7 @@ pub struct FusedBlockView<'a> {
 
 impl<'a> FusedBlockView<'a> {
     pub fn parse(bytes: &'a [u8]) -> Result<Self> {
-        if bytes.len() != FUSED_BLOCK_SIZE
-            || &bytes[..8] != MAGIC
-            || get_u16(bytes, 8) != VERSION
-            || get_u16(bytes, 10) as usize != FUSED_HEADER_SIZE
-        {
-            return Err(Error::Invariant(
-                "invalid fused-block magic, version, or size".to_owned(),
-            ));
-        }
-        let header = DecodedHeader {
-            epoch: get_u64(bytes, 12),
-            count: get_u16(bytes, 26) as usize,
-            dimension: get_u16(bytes, 28) as usize,
-            ids: get_u32(bytes, 32) as usize,
-            temporal: get_u32(bytes, 36) as usize,
-            vectors: get_u32(bytes, 40) as usize,
-            graph_offsets: get_u32(bytes, 44) as usize,
-            edges: get_u32(bytes, 48) as usize,
-            used: get_u32(bytes, 52) as usize,
-        };
-        if header.count == 0
-            || header.dimension == 0
-            || header.used > FUSED_BLOCK_SIZE
-            || header.ids < FUSED_HEADER_SIZE
-            || header.ids + header.count * 8 > header.temporal
-            || header.temporal + header.count * TEMPORAL_SIZE > header.vectors
-            || header.vectors + header.count * 8 + header.count * header.dimension
-                > header.graph_offsets
-            || header.graph_offsets + (header.count + 1) * 4 > header.edges
-            || header.edges > header.used
-            || !(header.used - header.edges).is_multiple_of(EDGE_SIZE)
-        {
-            return Err(Error::Invariant(
-                "fused-block section offsets are invalid".to_owned(),
-            ));
-        }
+        let header = decode_header(bytes)?;
         if block_crc(bytes, header.used) != get_u32(bytes, 20) {
             return Err(Error::Invariant("fused-block CRC32 mismatch".to_owned()));
         }
@@ -385,6 +350,15 @@ impl<'a> FusedBlockView<'a> {
         Ok(Self { bytes, header })
     }
 
+    /// Reconstruct a view after the owning cache has already validated this
+    /// exact immutable byte allocation with [`Self::parse`].
+    pub fn parse_cached(bytes: &'a [u8]) -> Result<Self> {
+        Ok(Self {
+            bytes,
+            header: decode_header(bytes)?,
+        })
+    }
+
     pub fn epoch(&self) -> u64 {
         self.header.epoch
     }
@@ -413,6 +387,46 @@ impl<'a> FusedBlockView<'a> {
             slot,
         })
     }
+}
+
+fn decode_header(bytes: &[u8]) -> Result<DecodedHeader> {
+    if bytes.len() != FUSED_BLOCK_SIZE
+        || &bytes[..8] != MAGIC
+        || get_u16(bytes, 8) != VERSION
+        || get_u16(bytes, 10) as usize != FUSED_HEADER_SIZE
+    {
+        return Err(Error::Invariant(
+            "invalid fused-block magic, version, or size".to_owned(),
+        ));
+    }
+    let header = DecodedHeader {
+        epoch: get_u64(bytes, 12),
+        count: get_u16(bytes, 26) as usize,
+        dimension: get_u16(bytes, 28) as usize,
+        ids: get_u32(bytes, 32) as usize,
+        temporal: get_u32(bytes, 36) as usize,
+        vectors: get_u32(bytes, 40) as usize,
+        graph_offsets: get_u32(bytes, 44) as usize,
+        edges: get_u32(bytes, 48) as usize,
+        used: get_u32(bytes, 52) as usize,
+    };
+    if header.count == 0
+        || header.dimension == 0
+        || header.used > FUSED_BLOCK_SIZE
+        || header.ids < FUSED_HEADER_SIZE
+        || header.ids + header.count * 8 > header.temporal
+        || header.temporal + header.count * TEMPORAL_SIZE > header.vectors
+        || header.vectors + header.count * 8 + header.count * header.dimension
+            > header.graph_offsets
+        || header.graph_offsets + (header.count + 1) * 4 > header.edges
+        || header.edges > header.used
+        || !(header.used - header.edges).is_multiple_of(EDGE_SIZE)
+    {
+        return Err(Error::Invariant(
+            "fused-block section offsets are invalid".to_owned(),
+        ));
+    }
+    Ok(header)
 }
 
 fn block_crc(bytes: &[u8], used: usize) -> u32 {

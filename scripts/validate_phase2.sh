@@ -60,10 +60,10 @@ cargo run --release --bin phase2-bench -- \
   --edges 10
 
 if command -v valgrind >/dev/null && command -v cg_annotate >/dev/null; then
-  valgrind --tool=cachegrind \
+  valgrind --tool=cachegrind --cache-sim=yes \
     --cachegrind-out-file="$metrics_dir/cachegrind-fused.out" \
     target/release/phase2-bench profile-fused --data-dir "$scratch_dir/profile-fused"
-  valgrind --tool=cachegrind \
+  valgrind --tool=cachegrind --cache-sim=yes \
     --cachegrind-out-file="$metrics_dir/cachegrind-split.out" \
     target/release/phase2-bench profile-split
   cg_annotate "$metrics_dir/cachegrind-fused.out" > "$metrics_dir/cachegrind-fused.txt"

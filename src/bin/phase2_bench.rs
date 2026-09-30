@@ -273,7 +273,7 @@ fn profile_fused(arguments: &[String]) -> Result<(), Box<dyn std::error::Error>>
                 continue;
             }
             let (block, slot) = locations[&id];
-            let view = FusedBlockView::parse(blocks[block].as_slice())?;
+            let view = FusedBlockView::parse_cached(blocks[block].as_slice())?;
             let record = view.record(slot)?;
             let vector = record.quantized_vector();
             let norm = vector

@@ -472,7 +472,7 @@ impl HybridIndex {
         let mut selected = None;
         for location in locations {
             let block = context.block(location.block_offset)?;
-            let view = FusedBlockView::parse(block.as_slice())?;
+            let view = FusedBlockView::parse_cached(block.as_slice())?;
             let record = view.record(location.slot as usize)?;
             if record.assertion_time() > asserted_before
                 || record.valid_from() > valid_at
