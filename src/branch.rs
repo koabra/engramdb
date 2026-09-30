@@ -109,7 +109,7 @@ impl Engine {
         let mut committed_length = 0;
         for event in &events {
             let length = event.data_length();
-            if length % crate::PAGE_SIZE as u64 != 0 || length < committed_length {
+            if !length.is_multiple_of(crate::PAGE_SIZE as u64) || length < committed_length {
                 return Err(Error::CorruptMetadata {
                     offset: 0,
                     reason: "invalid or decreasing data-file watermark".to_owned(),

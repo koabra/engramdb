@@ -336,7 +336,7 @@ impl<'a> FusedBlockView<'a> {
                 > header.graph_offsets
             || header.graph_offsets + (header.count + 1) * 4 > header.edges
             || header.edges > header.used
-            || (header.used - header.edges) % EDGE_SIZE != 0
+            || !(header.used - header.edges).is_multiple_of(EDGE_SIZE)
         {
             return Err(Error::Invariant(
                 "fused-block section offsets are invalid".to_owned(),
