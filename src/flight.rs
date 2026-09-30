@@ -87,11 +87,11 @@ impl FlightService for EngramFlightService {
     ) -> std::result::Result<Response<Self::DoGetStream>, Status> {
         let ticket = request.into_inner();
         let (session, query) = parse_session_payload(&ticket.ticket)?;
-        let batch = self
+        let batches = self
             .sessions
-            .query(session, query)
+            .query_batches(session, query, 1024)
             .map_err(invalid_status)?;
-        let input = stream::iter(vec![Ok(batch)]);
+        let input = stream::iter(batches.into_iter().map(Ok));
         let output = FlightDataEncoderBuilder::new()
             .build(input)
             .map(|result| result.map_err(|error| Status::internal(error.to_string())));

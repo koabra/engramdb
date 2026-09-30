@@ -8,9 +8,9 @@ use arrow_flight::Ticket;
 use futures::{StreamExt, TryStreamExt};
 
 use engramdb::{
-    explain, optimize, parse_enql, plan_logical, AccessPath, CatalogStats, Engine,
-    EngramFlightService, EnqlQuery, FusedNode, GraphEdge, Hash, SessionManager, SessionStatus,
-    TemporalPoint,
+    explain, optimize, parse_enql, plan_logical, query_rows_to_batches, AccessPath, CatalogStats,
+    Engine, EngramFlightService, EnqlQuery, FusedNode, GraphEdge, Hash, QueryRow, SessionManager,
+    SessionStatus, TemporalPoint,
 };
 use tempfile::tempdir;
 use tonic::Request;
@@ -151,6 +151,25 @@ fn committed_sessions_reject_further_ingestion() {
     assert!(sessions
         .ingest(session.id, vec![node("late", [1.0, 0.0], Vec::new())])
         .is_err());
+}
+
+#[test]
+fn vectorized_output_uses_1024_row_batches() {
+    let rows: Vec<QueryRow> = (0_u64..2050)
+        .map(|index| QueryRow {
+            id: Hash(*blake3::hash(&index.to_le_bytes()).as_bytes()),
+            score: index as f32,
+            depth: 0,
+        })
+        .collect();
+    let batches = query_rows_to_batches(&rows, 1024).unwrap();
+    assert_eq!(
+        batches
+            .iter()
+            .map(|batch| batch.num_rows())
+            .collect::<Vec<_>>(),
+        vec![1024, 1024, 2]
+    );
 }
 
 #[tokio::test]

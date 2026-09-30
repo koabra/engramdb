@@ -9,7 +9,7 @@ use uuid::Uuid;
 
 use crate::{
     execute, explain, optimize, parse_enql, plan_logical, projections_to_batch,
-    query_rows_to_batch, CatalogStats, Engine, Error, FusedNode, Result,
+    query_rows_to_batch, query_rows_to_batches, CatalogStats, Engine, Error, FusedNode, Result,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -74,6 +74,29 @@ impl SessionManager {
     }
 
     pub fn query(&self, session_id: Uuid, enql: &str) -> Result<RecordBatch> {
+        let batches = self.query_batches(session_id, enql, 1024)?;
+        if batches.len() == 1 {
+            return Ok(batches.into_iter().next().unwrap());
+        }
+        let schema = batches
+            .first()
+            .map(|batch| batch.schema())
+            .unwrap_or_else(|| crate::query_rows_to_batch(&[]).unwrap().schema());
+        arrow::compute::concat_batches(&schema, &batches)
+            .map_err(|error| Error::Arrow(error.to_string()))
+    }
+
+    pub fn query_batches(
+        &self,
+        session_id: Uuid,
+        enql: &str,
+        batch_size: usize,
+    ) -> Result<Vec<RecordBatch>> {
+        if batch_size == 0 {
+            return Err(Error::InvalidQuery(
+                "execution batch size must be positive".to_owned(),
+            ));
+        }
         self.engine.branch(session_id)?;
         let query = parse_enql(enql)?;
         let logical = plan_logical(&query);
@@ -83,7 +106,7 @@ impl SessionManager {
         };
         let physical = optimize(logical, stats);
         let rows = execute(&self.engine, session_id, &physical)?;
-        query_rows_to_batch(&rows)
+        query_rows_to_batches(&rows, batch_size)
     }
 
     pub fn explain(&self, session_id: Uuid, enql: &str) -> Result<String> {

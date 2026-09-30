@@ -37,6 +37,18 @@ pub fn query_rows_to_batch(rows: &[QueryRow]) -> Result<RecordBatch> {
     .map_err(|error| Error::Arrow(error.to_string()))
 }
 
+pub fn query_rows_to_batches(rows: &[QueryRow], batch_size: usize) -> Result<Vec<RecordBatch>> {
+    if batch_size == 0 {
+        return Err(Error::InvalidQuery(
+            "execution batch size must be positive".to_owned(),
+        ));
+    }
+    if rows.is_empty() {
+        return Ok(vec![query_rows_to_batch(&[])?]);
+    }
+    rows.chunks(batch_size).map(query_rows_to_batch).collect()
+}
+
 pub fn projections_to_batch(projections: &[NodeProjection]) -> Result<RecordBatch> {
     let dimensions = projections
         .first()

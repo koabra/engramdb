@@ -24,7 +24,7 @@ mod query;
 mod session;
 mod tree;
 
-pub use arrow_support::{projections_to_batch, query_rows_to_batch};
+pub use arrow_support::{projections_to_batch, query_rows_to_batch, query_rows_to_batches};
 pub use branch::{Branch, Engine, FaultPoint, MergeOutcome, TemporalRecord, Transaction};
 pub use buffer_pool::{BufferPool, BufferPoolStats, Page};
 pub use error::{Error, Result};
