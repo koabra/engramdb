@@ -7,8 +7,8 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use engramdb::{
-    dot_i8, selected_simd_flavor, DirectIo, DistanceMetric, FusedBlockBuilder, FusedBlockView,
-    GraphEdge, HnswConfig, HybridIndex, HybridRecord, FUSED_BLOCK_SIZE,
+    dot_i8, selected_simd_flavor, AlignedBlock, DirectIo, DistanceMetric, FusedBlockBuilder,
+    FusedBlockView, GraphEdge, HnswConfig, HybridIndex, HybridRecord, FUSED_BLOCK_SIZE,
 };
 
 fn main() {
@@ -260,6 +260,16 @@ fn profile_fused(arguments: &[String]) -> Result<(), Box<dyn std::error::Error>>
         }
         blocks.push(block);
     }
+    profile_fused_queries(&blocks, &locations, dimension)?;
+    Ok(())
+}
+
+#[inline(never)]
+fn profile_fused_queries(
+    blocks: &[AlignedBlock<FUSED_BLOCK_SIZE>],
+    locations: &std::collections::HashMap<u64, (usize, usize)>,
+    dimension: usize,
+) -> Result<(), Box<dyn std::error::Error>> {
     for query_id in 0..500 {
         let root = (query_id * 37 % 2_000) as u64;
         let mut query = vec![0_i8; dimension];
@@ -300,6 +310,15 @@ fn profile_split(_arguments: &[String]) -> Result<(), Box<dyn std::error::Error>
         .into_iter()
         .map(|record| (record.id, Box::new(record)))
         .collect::<std::collections::HashMap<_, _>>();
+    profile_split_queries(&by_id, dimension);
+    Ok(())
+}
+
+#[inline(never)]
+fn profile_split_queries(
+    by_id: &std::collections::HashMap<u64, Box<HybridRecord>>,
+    dimension: usize,
+) {
     for query_id in 0..500 {
         let root = (query_id * 37 % 2_000) as u64;
         let mut query = vec![0.0; dimension];
@@ -321,7 +340,6 @@ fn profile_split(_arguments: &[String]) -> Result<(), Box<dyn std::error::Error>
         }
         black_box(score);
     }
-    Ok(())
 }
 
 fn synthetic_records(nodes: usize, dimension: usize, edges: usize) -> Vec<HybridRecord> {
