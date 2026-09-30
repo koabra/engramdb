@@ -22,7 +22,7 @@ class VllmKvCacheAdapter:
 
     def restore_bytes(self, session_id: str) -> tuple[memoryview, dict]:
         buffer, spec = self.client.get_kv_cache(session_id)
-        return memoryview(buffer), spec
+        return memoryview(buffer).cast("B"), spec
 
     def restore_into(self, session_id: str, destination: Any) -> dict:
         source, spec = self.restore_bytes(session_id)
