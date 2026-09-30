@@ -115,6 +115,15 @@ impl CufileError {
 pub type CufileHandle = *mut libc::c_void;
 pub type CudaStream = *mut libc::c_void;
 
+#[derive(Debug)]
+pub struct CufileAsyncParams {
+    pub size: usize,
+    pub file_offset: i64,
+    pub buffer_offset: i64,
+    pub bytes_transferred: isize,
+    pub stream: CudaStream,
+}
+
 #[cfg(feature = "gds")]
 type DriverOpenFn = unsafe extern "C" fn() -> CufileError;
 #[cfg(feature = "gds")]
@@ -267,22 +276,18 @@ impl GdsApi {
         &self,
         handle: CufileHandle,
         device_pointer: *mut libc::c_void,
-        size: &mut usize,
-        file_offset: &mut i64,
-        buffer_offset: &mut i64,
-        bytes_read: &mut isize,
-        stream: CudaStream,
+        parameters: &mut CufileAsyncParams,
     ) -> Result<()> {
         // SAFETY: guaranteed by caller.
         let error = unsafe {
             (self.read_async)(
                 handle,
                 device_pointer,
-                size,
-                file_offset,
-                buffer_offset,
-                bytes_read,
-                stream,
+                &mut parameters.size,
+                &mut parameters.file_offset,
+                &mut parameters.buffer_offset,
+                &mut parameters.bytes_transferred,
+                parameters.stream,
             )
         };
         map_cufile_error("cuFileReadAsync", error)
@@ -319,22 +324,18 @@ impl GdsApi {
         &self,
         handle: CufileHandle,
         device_pointer: *const libc::c_void,
-        size: &mut usize,
-        file_offset: &mut i64,
-        buffer_offset: &mut i64,
-        bytes_written: &mut isize,
-        stream: CudaStream,
+        parameters: &mut CufileAsyncParams,
     ) -> Result<()> {
         // SAFETY: guaranteed by caller.
         let error = unsafe {
             (self.write_async)(
                 handle,
                 device_pointer,
-                size,
-                file_offset,
-                buffer_offset,
-                bytes_written,
-                stream,
+                &mut parameters.size,
+                &mut parameters.file_offset,
+                &mut parameters.buffer_offset,
+                &mut parameters.bytes_transferred,
+                parameters.stream,
             )
         };
         map_cufile_error("cuFileWriteAsync", error)

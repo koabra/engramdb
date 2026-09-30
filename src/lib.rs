@@ -38,7 +38,9 @@ pub use fused::{
 };
 #[cfg(feature = "gds")]
 pub use hardware::GdsApi;
-pub use hardware::{CudaStream, CufileError, CufileHandle, HardwareCapabilities, TransferPath};
+pub use hardware::{
+    CudaStream, CufileAsyncParams, CufileError, CufileHandle, HardwareCapabilities, TransferPath,
+};
 pub use hazard::{HazardAtomic, HazardDomain, HazardGuard};
 pub use hybrid::{
     BlockRef, HybridIndex, HybridIndexStats, NodeProjection, SearchResult, TraversalMatch,
