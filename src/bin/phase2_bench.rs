@@ -317,10 +317,12 @@ fn read_fvecs(path: &Path, limit: usize) -> io::Result<Vec<Vec<f32>>> {
         let dimension = u32::from_le_bytes(dimension) as usize;
         let mut bytes = vec![0_u8; dimension * 4];
         reader.read_exact(&mut bytes)?;
+        let (values, remainder) = bytes.as_chunks::<4>();
+        debug_assert!(remainder.is_empty());
         output.push(
-            bytes
-                .chunks_exact(4)
-                .map(|value| f32::from_le_bytes(value.try_into().unwrap()))
+            values
+                .iter()
+                .map(|value| f32::from_le_bytes(*value))
                 .collect(),
         );
     }
@@ -340,10 +342,12 @@ fn read_ivecs(path: &Path, limit: usize) -> io::Result<Vec<Vec<u32>>> {
         let dimension = u32::from_le_bytes(dimension) as usize;
         let mut bytes = vec![0_u8; dimension * 4];
         reader.read_exact(&mut bytes)?;
+        let (values, remainder) = bytes.as_chunks::<4>();
+        debug_assert!(remainder.is_empty());
         output.push(
-            bytes
-                .chunks_exact(4)
-                .map(|value| u32::from_le_bytes(value.try_into().unwrap()))
+            values
+                .iter()
+                .map(|value| u32::from_le_bytes(*value))
                 .collect(),
         );
     }
