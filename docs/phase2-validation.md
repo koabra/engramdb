@@ -30,7 +30,7 @@ current-code regression/query run.
 | 64 KiB readiness | Size-aligned generic direct I/O round trip; Phase 1 remains 4 KiB | Pass |
 | Fused integrity | Header+payload CRC, checked section/CSR bounds, finite scales/weights, corruption rejection | Pass |
 | Generation recovery | Block-write, block-sync, and partial-manifest faults; failed generations cannot leak into later commits | Pass |
-| Recall | Checksum-pinned full SIFT1M: 1M base vectors, 10K queries, published neighbors | Pass: Recall@10 0.96955 |
+| Recall | Checksum-pinned full SIFT1M: 1M base vectors, 10K queries, published neighbors | Pass: Recall@10 0.96964 |
 | Multi-modal correctness | Synthetic temporal graph traversal compared with a brute-force oracle | Pass |
 | Query workload | 10,000 randomized three-hop semantic+graph+time queries | Pass |
 | Cache profiling | Paired fused/split INT8 query kernels under the same explicit Cachegrind model | Fail: fused misses were higher |
