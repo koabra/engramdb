@@ -439,7 +439,11 @@ impl HybridIndex {
                 block_offset: offset,
                 slot: slot as u16,
             };
-            let vector = QuantizedVector::from_parts(record.quantized_vector(), record.scale())?;
+            let vector = QuantizedVector::from_parts(
+                record.quantized_vector(),
+                record.scale(),
+                record.zero_point(),
+            )?;
             self.hnsw
                 .insert(index_key(offset, slot), record.id(), vector, location)?;
             self.locations
@@ -492,7 +496,11 @@ impl HybridIndex {
                     valid_from: record.valid_from(),
                     valid_to: record.valid_to(),
                 },
-                vector: QuantizedVector::from_parts(record.quantized_vector(), record.scale())?,
+                vector: QuantizedVector::from_parts(
+                    record.quantized_vector(),
+                    record.scale(),
+                    record.zero_point(),
+                )?,
                 edges: record.edges().collect(),
                 location: *location,
             });
