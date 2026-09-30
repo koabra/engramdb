@@ -1,0 +1,2 @@
+product,sample_nodes,dimension,edges,blocks,block_file_bytes,bytes_per_node,extrapolated_10m_bytes
+engramdb,100000,768,10,1493,97845248,978.452,9784524800
