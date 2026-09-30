@@ -9,7 +9,7 @@ use uuid::Uuid;
 
 use crate::{
     execute, explain, optimize, parse_enql, plan_logical, projections_to_batch,
-    query_rows_to_batch, query_rows_to_batches, CatalogStats, Engine, Error, FusedNode, Result,
+    query_rows_to_batches, CatalogStats, Engine, Error, FusedNode, Result,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
