@@ -10,8 +10,8 @@ use crate::io::{AlignedPage, DirectIo, FUSED_BLOCK_LAYOUT, FUSED_BLOCK_SIZE};
 use crate::tree::Hash;
 use crate::{Error, Result};
 
-const DEFAULT_HNSW_M: usize = 16;
-const DEFAULT_EF_CONSTRUCTION: usize = 128;
+const DEFAULT_HNSW_M: usize = 32;
+const DEFAULT_EF_CONSTRUCTION: usize = 256;
 const DEFAULT_EF_SEARCH: usize = 256;
 const MAX_HNSW_LEVEL: usize = 12;
 
@@ -513,7 +513,7 @@ impl Hnsw {
             for candidate in &candidates {
                 let neighbor = candidate.index;
                 self.nodes[neighbor].neighbors[layer].push(index);
-                if self.nodes[neighbor].neighbors[layer].len() > self.m {
+                if self.nodes[neighbor].neighbors[layer].len() > self.m * 2 {
                     let mut ranked = self.nodes[neighbor].neighbors[layer]
                         .iter()
                         .copied()
@@ -525,7 +525,7 @@ impl Hnsw {
                         })
                         .collect::<Result<Vec<_>>>()?;
                     ranked.sort_by(|left, right| right.cmp(left));
-                    ranked.truncate(self.m);
+                    ranked.truncate(self.m * 2);
                     self.nodes[neighbor].neighbors[layer] = ranked
                         .into_iter()
                         .map(|candidate| candidate.index)
@@ -670,5 +670,5 @@ impl Hnsw {
 
 fn deterministic_level(id: Hash) -> usize {
     let seed = u64::from_le_bytes(id.0[..8].try_into().unwrap());
-    (seed.trailing_zeros() as usize / 2).min(MAX_HNSW_LEVEL)
+    (seed.trailing_zeros() as usize / 4).min(MAX_HNSW_LEVEL)
 }
