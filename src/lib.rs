@@ -12,6 +12,7 @@ compile_error!("EngramDB requires Linux io_uring and O_DIRECT");
 
 mod branch;
 mod buffer_pool;
+mod checkpoint;
 mod error;
 mod fused;
 mod hazard;

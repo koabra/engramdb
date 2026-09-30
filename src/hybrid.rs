@@ -14,6 +14,8 @@ const DEFAULT_HNSW_M: usize = 32;
 const DEFAULT_EF_CONSTRUCTION: usize = 256;
 const DEFAULT_EF_SEARCH: usize = 256;
 const MAX_HNSW_LEVEL: usize = 12;
+const CHECKPOINT_MAGIC: &[u8; 8] = b"ENGHNSW1";
+const CHECKPOINT_VERSION: u8 = 1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BlockRef {
@@ -95,7 +97,14 @@ impl HybridIndex {
 
     pub fn open_with_metric(path: impl AsRef<Path>, metric: VectorMetric) -> Result<Self> {
         let io = Arc::new(DirectIo::open_with_layout(path, 256, FUSED_BLOCK_LAYOUT)?);
-        let mut index = Self {
+        let mut index = Self::empty_with_io(io, metric);
+        index.load_blocks()?;
+        index.rebuild_hnsw()?;
+        Ok(index)
+    }
+
+    pub(crate) fn empty_with_io(io: Arc<DirectIo>, metric: VectorMetric) -> Self {
+        Self {
             io,
             blocks: Vec::new(),
             locations: Vec::new(),
@@ -104,13 +113,27 @@ impl HybridIndex {
             logical_bytes: 0,
             vector_dimension: None,
             metric,
-        };
-        index.load_blocks()?;
-        index.rebuild_hnsw()?;
-        Ok(index)
+        }
     }
 
     pub fn insert(&mut self, epoch: u64, nodes: Vec<FusedNode>) -> Result<Vec<BlockRef>> {
+        self.insert_inner(epoch, nodes, true)
+    }
+
+    pub(crate) fn insert_uncommitted(
+        &mut self,
+        epoch: u64,
+        nodes: Vec<FusedNode>,
+    ) -> Result<Vec<BlockRef>> {
+        self.insert_inner(epoch, nodes, false)
+    }
+
+    fn insert_inner(
+        &mut self,
+        epoch: u64,
+        nodes: Vec<FusedNode>,
+        sync: bool,
+    ) -> Result<Vec<BlockRef>> {
         if nodes.is_empty() {
             return Ok(Vec::new());
         }
@@ -161,7 +184,9 @@ impl HybridIndex {
                 bytes: block,
             });
         }
-        self.io.sync()?;
+        if sync {
+            self.io.sync()?;
+        }
         for block in first_block..self.blocks.len() {
             self.catalog_block(block)?;
         }
@@ -170,6 +195,221 @@ impl HybridIndex {
             .iter()
             .map(|location| location.reference)
             .collect())
+    }
+
+    pub(crate) fn checkpoint_bytes(&self) -> Result<Vec<u8>> {
+        let mut output = Vec::new();
+        output.extend_from_slice(CHECKPOINT_MAGIC);
+        output.push(CHECKPOINT_VERSION);
+        output.push(match self.metric {
+            VectorMetric::Cosine => 1,
+            VectorMetric::SquaredL2 => 2,
+        });
+        put_u16(&mut output, self.hnsw.m as u16);
+        put_u32(&mut output, self.hnsw.ef_search as u32);
+        put_u32(&mut output, self.hnsw.ef_construction as u32);
+        put_u16(&mut output, self.hnsw.max_level as u16);
+        put_u16(&mut output, 0);
+        put_u64(
+            &mut output,
+            self.hnsw
+                .entry
+                .map(|entry| entry as u64)
+                .unwrap_or(u64::MAX),
+        );
+        put_u64(&mut output, self.locations.len() as u64);
+        for (index, location) in self.locations.iter().enumerate() {
+            let node = self.node(index)?;
+            output.extend_from_slice(&node.id().0);
+            output.extend_from_slice(&location.reference.hash.0);
+            put_u64(&mut output, location.reference.offset);
+            put_u16(&mut output, location.reference.slot);
+            let hnsw_node = &self.hnsw.nodes[index];
+            put_u16(&mut output, hnsw_node.level as u16);
+            put_u16(&mut output, hnsw_node.neighbors.len() as u16);
+            put_u16(&mut output, 0);
+            for layer in &hnsw_node.neighbors {
+                put_u32(&mut output, layer.len() as u32);
+                for neighbor in layer {
+                    put_u64(&mut output, *neighbor as u64);
+                }
+            }
+        }
+        Ok(output)
+    }
+
+    pub(crate) fn from_checkpoint(
+        io: Arc<DirectIo>,
+        bytes: &[u8],
+        fused_length: u64,
+    ) -> Result<Self> {
+        let mut cursor = CheckpointCursor::new(bytes);
+        if cursor.fixed::<8>()? != *CHECKPOINT_MAGIC {
+            return Err(Error::Invariant(
+                "invalid durable HNSW checkpoint magic".to_owned(),
+            ));
+        }
+        if cursor.u8()? != CHECKPOINT_VERSION {
+            return Err(Error::Invariant(
+                "unsupported durable HNSW checkpoint version".to_owned(),
+            ));
+        }
+        let metric = match cursor.u8()? {
+            1 => VectorMetric::Cosine,
+            2 => VectorMetric::SquaredL2,
+            _ => {
+                return Err(Error::Invariant("invalid durable HNSW metric".to_owned()));
+            }
+        };
+        let m = cursor.u16()? as usize;
+        let ef_search = cursor.u32()? as usize;
+        let ef_construction = cursor.u32()? as usize;
+        let max_level = cursor.u16()? as usize;
+        cursor.u16()?;
+        let entry_value = cursor.u64()?;
+        let node_count = usize::try_from(cursor.u64()?)
+            .map_err(|_| Error::Invariant("HNSW node count exceeds usize".to_owned()))?;
+        let mut index = Self::empty_with_io(io, metric);
+        let mut blocks_by_offset = HashMap::<u64, usize>::new();
+        let mut hnsw_nodes = Vec::with_capacity(node_count);
+        for node_index in 0..node_count {
+            let id = Hash(cursor.fixed::<32>()?);
+            let block_hash = Hash(cursor.fixed::<32>()?);
+            let offset = cursor.u64()?;
+            let slot = cursor.u16()? as usize;
+            let level = cursor.u16()? as usize;
+            let layer_count = cursor.u16()? as usize;
+            cursor.u16()?;
+            if offset
+                .checked_add(FUSED_BLOCK_SIZE as u64)
+                .is_none_or(|end| end > fused_length)
+            {
+                return Err(Error::CorruptMetadata {
+                    offset,
+                    reason: "HNSW checkpoint references data beyond fused watermark".to_owned(),
+                });
+            }
+            if layer_count != level + 1 {
+                return Err(Error::Invariant(
+                    "durable HNSW layer count does not match level".to_owned(),
+                ));
+            }
+            let block = if let Some(block) = blocks_by_offset.get(&offset).copied() {
+                if index.blocks[block].reference_hash != block_hash {
+                    return Err(Error::Invariant(
+                        "checkpoint gives conflicting hashes for one fused offset".to_owned(),
+                    ));
+                }
+                block
+            } else {
+                let block_bytes = index.io.read(offset)?;
+                FusedBlockView::parse(block_bytes.as_slice(), offset)?;
+                let actual_hash = Hash(*blake3::hash(block_bytes.as_slice()).as_bytes());
+                if actual_hash != block_hash {
+                    return Err(Error::CorruptPage {
+                        offset,
+                        reason: "durable HNSW block hash mismatch".to_owned(),
+                    });
+                }
+                let block = index.blocks.len();
+                index.blocks.push(StoredBlock {
+                    reference_hash: actual_hash,
+                    offset,
+                    bytes: block_bytes,
+                });
+                blocks_by_offset.insert(offset, block);
+                block
+            };
+            let view =
+                FusedBlockView::trusted(index.blocks[block].bytes.as_slice()).node(slot, offset)?;
+            if view.id() != id {
+                return Err(Error::CorruptPage {
+                    offset,
+                    reason: "durable HNSW node id does not match fused slot".to_owned(),
+                });
+            }
+            match index.vector_dimension {
+                Some(dimension) if dimension != view.vector().len() => {
+                    return Err(Error::DimensionMismatch {
+                        expected: dimension,
+                        actual: view.vector().len(),
+                    });
+                }
+                None => index.vector_dimension = Some(view.vector().len()),
+                Some(_) => {}
+            }
+            if index.by_id.insert(id, node_index).is_some() {
+                return Err(Error::Invariant(
+                    "durable HNSW checkpoint contains duplicate node ids".to_owned(),
+                ));
+            }
+            index.logical_bytes += 64
+                + view.vector().len() as u64
+                + view.temporal().count() as u64 * 16
+                + view.edges().count() as u64 * 40;
+            index.locations.push(NodeLocation {
+                block,
+                slot,
+                reference: BlockRef {
+                    hash: block_hash,
+                    offset,
+                    slot: slot as u16,
+                },
+            });
+            let mut neighbors = Vec::with_capacity(layer_count);
+            for _ in 0..layer_count {
+                let neighbor_count = cursor.u32()? as usize;
+                let mut layer = Vec::with_capacity(neighbor_count);
+                for _ in 0..neighbor_count {
+                    let neighbor = usize::try_from(cursor.u64()?).map_err(|_| {
+                        Error::Invariant("HNSW neighbor index exceeds usize".to_owned())
+                    })?;
+                    if neighbor >= node_count {
+                        return Err(Error::Invariant(
+                            "durable HNSW neighbor is outside checkpoint".to_owned(),
+                        ));
+                    }
+                    layer.push(neighbor);
+                }
+                neighbors.push(layer);
+            }
+            hnsw_nodes.push(HnswNode { level, neighbors });
+        }
+        if !cursor.is_finished() {
+            return Err(Error::Invariant(
+                "trailing bytes in durable HNSW checkpoint".to_owned(),
+            ));
+        }
+        let entry = if entry_value == u64::MAX {
+            None
+        } else {
+            let entry = usize::try_from(entry_value)
+                .map_err(|_| Error::Invariant("HNSW entry exceeds usize".to_owned()))?;
+            if entry >= node_count {
+                return Err(Error::Invariant(
+                    "durable HNSW entry is outside checkpoint".to_owned(),
+                ));
+            }
+            Some(entry)
+        };
+        if node_count == 0 && entry.is_some() || node_count > 0 && entry.is_none() {
+            return Err(Error::Invariant(
+                "durable HNSW entry does not match node count".to_owned(),
+            ));
+        }
+        index.hnsw = Hnsw {
+            nodes: hnsw_nodes,
+            entry,
+            max_level,
+            m,
+            ef_search,
+            ef_construction,
+        };
+        Ok(index)
+    }
+
+    pub(crate) fn fused_length(&self) -> u64 {
+        self.io.len()
     }
 
     pub fn get(&self, id: Hash) -> Result<Option<FusedNodeView<'_>>> {
@@ -435,11 +675,13 @@ impl Ord for Scored {
     }
 }
 
+#[derive(Clone)]
 struct HnswNode {
     level: usize,
     neighbors: Vec<Vec<usize>>,
 }
 
+#[derive(Clone)]
 struct Hnsw {
     nodes: Vec<HnswNode>,
     entry: Option<usize>,
@@ -671,4 +913,60 @@ impl Hnsw {
 fn deterministic_level(id: Hash) -> usize {
     let seed = u64::from_le_bytes(id.0[..8].try_into().unwrap());
     (seed.trailing_zeros() as usize / 4).min(MAX_HNSW_LEVEL)
+}
+
+fn put_u16(output: &mut Vec<u8>, value: u16) {
+    output.extend_from_slice(&value.to_le_bytes());
+}
+
+fn put_u32(output: &mut Vec<u8>, value: u32) {
+    output.extend_from_slice(&value.to_le_bytes());
+}
+
+fn put_u64(output: &mut Vec<u8>, value: u64) {
+    output.extend_from_slice(&value.to_le_bytes());
+}
+
+struct CheckpointCursor<'a> {
+    bytes: &'a [u8],
+    position: usize,
+}
+
+impl<'a> CheckpointCursor<'a> {
+    fn new(bytes: &'a [u8]) -> Self {
+        Self { bytes, position: 0 }
+    }
+
+    fn u8(&mut self) -> Result<u8> {
+        Ok(self.fixed::<1>()?[0])
+    }
+
+    fn u16(&mut self) -> Result<u16> {
+        Ok(u16::from_le_bytes(self.fixed::<2>()?))
+    }
+
+    fn u32(&mut self) -> Result<u32> {
+        Ok(u32::from_le_bytes(self.fixed::<4>()?))
+    }
+
+    fn u64(&mut self) -> Result<u64> {
+        Ok(u64::from_le_bytes(self.fixed::<8>()?))
+    }
+
+    fn fixed<const N: usize>(&mut self) -> Result<[u8; N]> {
+        if self.position + N > self.bytes.len() {
+            return Err(Error::Invariant(
+                "durable HNSW checkpoint is truncated".to_owned(),
+            ));
+        }
+        let value = self.bytes[self.position..self.position + N]
+            .try_into()
+            .unwrap();
+        self.position += N;
+        Ok(value)
+    }
+
+    fn is_finished(&self) -> bool {
+        self.position == self.bytes.len()
+    }
 }

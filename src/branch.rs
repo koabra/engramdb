@@ -11,9 +11,11 @@ use std::sync::Arc;
 use parking_lot::{Mutex, RwLock};
 use uuid::Uuid;
 
-use crate::io::{DirectIo, IoStats};
+use crate::checkpoint::{CheckpointLog, CheckpointRoot};
+use crate::hybrid::{HybridIndex, SearchResult, TraversalMatch, TriModalQuery, VectorMetric};
+use crate::io::{DirectIo, IoStats, FUSED_BLOCK_LAYOUT, FUSED_BLOCK_SIZE};
 use crate::tree::{Hash, NodeRef, NodeStore, PersistentTree};
-use crate::{Error, Result};
+use crate::{Error, FusedNode, Result};
 
 const META_MAGIC: &[u8; 8] = b"ENGMETA1";
 const META_HEADER: usize = 20;
@@ -53,6 +55,7 @@ pub struct Branch {
     pub id: Uuid,
     pub parent_id: Option<Uuid>,
     pub root_hash: Hash,
+    pub hybrid_root_hash: Option<Hash>,
     pub epoch: u64,
 }
 
@@ -76,6 +79,7 @@ struct BranchState {
     branch: Branch,
     root: NodeRef,
     fork_root: NodeRef,
+    hybrid_root: Option<CheckpointRoot>,
 }
 
 struct EngineState {
@@ -83,12 +87,17 @@ struct EngineState {
     main: Uuid,
     epoch: u64,
     data_length: u64,
+    fused_length: u64,
+    hnsw_length: u64,
 }
 
 pub struct Engine {
     directory: PathBuf,
     _directory_lock: File,
     store: Arc<NodeStore>,
+    fused_io: Arc<DirectIo>,
+    checkpoints: CheckpointLog,
+    hybrid_cache: RwLock<HashMap<Hash, Arc<HybridIndex>>>,
     tree: PersistentTree,
     metadata: MetadataLog,
     state: RwLock<EngineState>,
@@ -100,6 +109,12 @@ impl Engine {
         fs::create_dir_all(&directory)?;
         let directory_lock = acquire_directory_lock(&directory)?;
         let io = Arc::new(DirectIo::open(directory.join("pages.dat"), 256)?);
+        let fused_io = Arc::new(DirectIo::open_with_layout(
+            directory.join("fused.dat"),
+            256,
+            FUSED_BLOCK_LAYOUT,
+        )?);
+        let checkpoints = CheckpointLog::open(directory.join("hnsw.dat"))?;
         let metadata = MetadataLog::open(directory.join("branches.log"))?;
         sync_directory(&directory)?;
         if let Some(parent) = directory.parent() {
@@ -107,15 +122,24 @@ impl Engine {
         }
         let events = metadata.replay()?;
         let mut committed_length = 0;
+        let mut committed_fused_length = 0;
+        let mut committed_hnsw_length = 0;
         for event in &events {
-            let length = event.data_length();
-            if length % crate::PAGE_SIZE as u64 != 0 || length < committed_length {
+            let (length, fused_length, hnsw_length) = event.watermarks();
+            if length % crate::PAGE_SIZE as u64 != 0
+                || length < committed_length
+                || fused_length % FUSED_BLOCK_SIZE as u64 != 0
+                || fused_length < committed_fused_length
+                || hnsw_length < committed_hnsw_length
+            {
                 return Err(Error::CorruptMetadata {
                     offset: 0,
                     reason: "invalid or decreasing data-file watermark".to_owned(),
                 });
             }
             committed_length = length;
+            committed_fused_length = fused_length;
+            committed_hnsw_length = hnsw_length;
         }
         if io.len() < committed_length {
             return Err(Error::CorruptPage {
@@ -126,10 +150,33 @@ impl Engine {
         if io.len() > committed_length {
             io.truncate(committed_length)?;
         }
+        if fused_io.len() < committed_fused_length {
+            return Err(Error::CorruptPage {
+                offset: fused_io.len(),
+                reason: format!(
+                    "fused file is shorter than committed watermark {committed_fused_length}"
+                ),
+            });
+        }
+        if fused_io.len() > committed_fused_length {
+            fused_io.truncate(committed_fused_length)?;
+        }
+        if checkpoints.len()? < committed_hnsw_length {
+            return Err(Error::CorruptMetadata {
+                offset: checkpoints.len()?,
+                reason: format!(
+                    "HNSW file is shorter than committed watermark {committed_hnsw_length}"
+                ),
+            });
+        }
+        if checkpoints.len()? > committed_hnsw_length {
+            checkpoints.truncate(committed_hnsw_length)?;
+        }
         let store = Arc::new(NodeStore::open(io, 4096)?);
         let tree = PersistentTree::new(Arc::clone(&store));
 
         let mut branches = HashMap::new();
+        let mut hybrid_cache = HashMap::new();
         let mut main = None;
         let mut epoch = 0;
         for event in events {
@@ -139,10 +186,21 @@ impl Engine {
                     parent,
                     root,
                     fork_root,
+                    hybrid_root,
                     epoch: event_epoch,
+                    fused_length,
+                    hnsw_length,
                     ..
                 } => {
                     validate_root(&tree, &store, root)?;
+                    validate_hybrid_root(
+                        &fused_io,
+                        &checkpoints,
+                        hybrid_root,
+                        fused_length,
+                        hnsw_length,
+                        &mut hybrid_cache,
+                    )?;
                     if let Some(parent_id) = parent {
                         if !branches.contains_key(&parent_id) {
                             return Err(Error::CorruptMetadata {
@@ -164,23 +222,38 @@ impl Engine {
                                 id,
                                 parent_id: parent,
                                 root_hash: root.hash,
+                                hybrid_root_hash: hybrid_root.map(|root| root.hash),
                                 epoch: event_epoch,
                             },
                             root,
                             fork_root,
+                            hybrid_root,
                         },
                     );
                 }
                 MetadataEvent::Commit {
                     id,
                     root,
+                    hybrid_root,
                     epoch: event_epoch,
+                    fused_length,
+                    hnsw_length,
                     ..
                 } => {
                     validate_root(&tree, &store, root)?;
+                    validate_hybrid_root(
+                        &fused_io,
+                        &checkpoints,
+                        hybrid_root,
+                        fused_length,
+                        hnsw_length,
+                        &mut hybrid_cache,
+                    )?;
                     let state = branches.get_mut(&id).ok_or(Error::UnknownBranch(id))?;
                     state.root = root;
+                    state.hybrid_root = hybrid_root;
                     state.branch.root_hash = root.hash;
+                    state.branch.hybrid_root_hash = hybrid_root.map(|root| root.hash);
                     state.branch.epoch = event_epoch;
                     epoch = epoch.max(event_epoch);
                 }
@@ -188,10 +261,21 @@ impl Engine {
                     target,
                     source,
                     root,
+                    hybrid_root,
                     epoch: event_epoch,
+                    fused_length,
+                    hnsw_length,
                     ..
                 } => {
                     validate_root(&tree, &store, root)?;
+                    validate_hybrid_root(
+                        &fused_io,
+                        &checkpoints,
+                        hybrid_root,
+                        fused_length,
+                        hnsw_length,
+                        &mut hybrid_cache,
+                    )?;
                     if !branches.contains_key(&source) {
                         return Err(Error::UnknownBranch(source));
                     }
@@ -199,7 +283,9 @@ impl Engine {
                         .get_mut(&target)
                         .ok_or(Error::UnknownBranch(target))?;
                     state.root = root;
+                    state.hybrid_root = hybrid_root;
                     state.branch.root_hash = root.hash;
+                    state.branch.hybrid_root_hash = hybrid_root.map(|root| root.hash);
                     state.branch.epoch = event_epoch;
                     epoch = epoch.max(event_epoch);
                 }
@@ -215,8 +301,11 @@ impl Engine {
                 parent: None,
                 root,
                 fork_root: root,
+                hybrid_root: None,
                 epoch: 0,
                 data_length: store.io().len(),
+                fused_length: 0,
+                hnsw_length: 0,
             };
             metadata.append(&event, false)?;
             main = Some(id);
@@ -227,10 +316,12 @@ impl Engine {
                         id,
                         parent_id: None,
                         root_hash: root.hash,
+                        hybrid_root_hash: None,
                         epoch: 0,
                     },
                     root,
                     fork_root: root,
+                    hybrid_root: None,
                 },
             );
         }
@@ -240,6 +331,9 @@ impl Engine {
             directory,
             _directory_lock: directory_lock,
             store,
+            fused_io,
+            checkpoints,
+            hybrid_cache: RwLock::new(hybrid_cache),
             tree,
             metadata,
             state: RwLock::new(EngineState {
@@ -247,6 +341,8 @@ impl Engine {
                 main: main.expect("non-empty metadata has a root branch"),
                 epoch,
                 data_length,
+                fused_length: committed_fused_length,
+                hnsw_length: committed_hnsw_length,
             }),
         })
     }
@@ -283,6 +379,7 @@ impl Engine {
             id: Uuid::new_v4(),
             parent_id: Some(parent),
             root_hash: parent_state.root.hash,
+            hybrid_root_hash: parent_state.hybrid_root.map(|root| root.hash),
             epoch: state.epoch,
         };
         self.metadata.append(
@@ -291,8 +388,11 @@ impl Engine {
                 parent: Some(parent),
                 root: parent_state.root,
                 fork_root: parent_state.root,
+                hybrid_root: parent_state.hybrid_root,
                 epoch: branch.epoch,
                 data_length: state.data_length,
+                fused_length: state.fused_length,
+                hnsw_length: state.hnsw_length,
             },
             false,
         )?;
@@ -302,24 +402,25 @@ impl Engine {
                 branch: branch.clone(),
                 root: parent_state.root,
                 fork_root: parent_state.root,
+                hybrid_root: parent_state.hybrid_root,
             },
         );
         Ok(branch)
     }
 
     pub fn begin(&self, branch: Uuid) -> Result<Transaction<'_>> {
-        let root = self
-            .state
-            .read()
+        let state = self.state.read();
+        let branch_state = state
             .branches
             .get(&branch)
-            .map(|state| state.root)
             .ok_or(Error::UnknownBranch(branch))?;
         Ok(Transaction {
             engine: self,
             branch,
-            expected_root: root,
+            expected_root: branch_state.root,
+            expected_hybrid_root: branch_state.hybrid_root,
             writes: Vec::new(),
+            fused_writes: Vec::new(),
         })
     }
 
@@ -359,6 +460,91 @@ impl Engine {
         Ok(best)
     }
 
+    pub fn hybrid_nearest(
+        &self,
+        branch: Uuid,
+        vector: &[f32],
+        count: usize,
+    ) -> Result<Vec<SearchResult>> {
+        match self.hybrid_index(branch)? {
+            Some(index) => index.nearest(vector, count),
+            None => Ok(Vec::new()),
+        }
+    }
+
+    pub fn hybrid_query(
+        &self,
+        branch: Uuid,
+        start: Hash,
+        query: TriModalQuery<'_>,
+    ) -> Result<Vec<TraversalMatch>> {
+        match self.hybrid_index(branch)? {
+            Some(index) => index.tri_modal_query(start, query),
+            None => Ok(Vec::new()),
+        }
+    }
+
+    pub fn hybrid_node_count(&self, branch: Uuid) -> Result<usize> {
+        Ok(self
+            .hybrid_index(branch)?
+            .map(|index| index.stats().nodes)
+            .unwrap_or(0))
+    }
+
+    fn hybrid_index(&self, branch: Uuid) -> Result<Option<Arc<HybridIndex>>> {
+        let (root, fused_length, hnsw_length) = {
+            let state = self.state.read();
+            let branch = state
+                .branches
+                .get(&branch)
+                .ok_or(Error::UnknownBranch(branch))?;
+            (branch.hybrid_root, state.fused_length, state.hnsw_length)
+        };
+        let Some(root) = root else {
+            return Ok(None);
+        };
+        if let Some(index) = self.hybrid_cache.read().get(&root.hash).cloned() {
+            return Ok(Some(index));
+        }
+        if root
+            .offset
+            .checked_add(root.length)
+            .is_none_or(|end| end > hnsw_length)
+        {
+            return Err(Error::CorruptMetadata {
+                offset: root.offset,
+                reason: "branch HNSW root exceeds committed watermark".to_owned(),
+            });
+        }
+        let bytes = self.checkpoints.read(root)?;
+        let index = Arc::new(HybridIndex::from_checkpoint(
+            Arc::clone(&self.fused_io),
+            &bytes,
+            fused_length,
+        )?);
+        self.hybrid_cache
+            .write()
+            .insert(root.hash, Arc::clone(&index));
+        Ok(Some(index))
+    }
+
+    fn hybrid_index_owned(
+        &self,
+        root: Option<CheckpointRoot>,
+        fused_length: u64,
+    ) -> Result<HybridIndex> {
+        match root {
+            Some(root) => {
+                let bytes = self.checkpoints.read(root)?;
+                HybridIndex::from_checkpoint(Arc::clone(&self.fused_io), &bytes, fused_length)
+            }
+            None => Ok(HybridIndex::empty_with_io(
+                Arc::clone(&self.fused_io),
+                VectorMetric::Cosine,
+            )),
+        }
+    }
+
     pub fn merge(&self, target: Uuid, source: Uuid) -> Result<MergeOutcome> {
         let mut state = self.state.write();
         let target_state = state
@@ -371,6 +557,11 @@ impl Engine {
             .get(&source)
             .cloned()
             .ok_or(Error::UnknownBranch(source))?;
+        if target_state.hybrid_root != source_state.hybrid_root {
+            return Err(Error::Invariant(
+                "hybrid merge requires identical durable HNSW roots".to_owned(),
+            ));
+        }
         let base_root = merge_base(&target_state, &source_state)?;
 
         let base = logical_ranges(&self.tree, base_root)?;
@@ -414,15 +605,20 @@ impl Engine {
                 target,
                 source,
                 root,
+                hybrid_root: target_state.hybrid_root,
                 epoch: merge_epoch,
                 data_length: self.store.io().len(),
+                fused_length: state.fused_length,
+                hnsw_length: state.hnsw_length,
             },
             false,
         )?;
         state.data_length = self.store.io().len();
         let target_mut = state.branches.get_mut(&target).unwrap();
         target_mut.root = root;
+        target_mut.hybrid_root = target_state.hybrid_root;
         target_mut.branch.root_hash = root.hash;
+        target_mut.branch.hybrid_root_hash = target_state.hybrid_root.map(|root| root.hash);
         target_mut.branch.epoch = merge_epoch;
         Ok(MergeOutcome {
             root_hash: root.hash,
@@ -432,8 +628,19 @@ impl Engine {
     }
 
     pub fn validate(&self) -> Result<()> {
-        for branch in self.state.read().branches.values() {
+        let branch_ids: Vec<Uuid> = self.state.read().branches.keys().copied().collect();
+        for branch_id in branch_ids {
+            let state = self.state.read();
+            let branch = state
+                .branches
+                .get(&branch_id)
+                .ok_or(Error::UnknownBranch(branch_id))?;
             validate_root(&self.tree, &self.store, branch.root)?;
+            let has_hybrid = branch.hybrid_root.is_some();
+            drop(state);
+            if has_hybrid {
+                self.hybrid_index(branch_id)?;
+            }
         }
         Ok(())
     }
@@ -451,7 +658,9 @@ pub struct Transaction<'a> {
     engine: &'a Engine,
     branch: Uuid,
     expected_root: NodeRef,
+    expected_hybrid_root: Option<CheckpointRoot>,
     writes: Vec<TemporalRecord>,
+    fused_writes: Vec<FusedNode>,
 }
 
 impl Transaction<'_> {
@@ -463,54 +672,104 @@ impl Transaction<'_> {
         Ok(())
     }
 
+    pub fn put_fused(&mut self, node: FusedNode) -> Result<()> {
+        if self
+            .fused_writes
+            .iter()
+            .any(|candidate| candidate.id == node.id)
+        {
+            return Err(Error::Invariant(format!(
+                "duplicate staged fused node id {}",
+                node.id
+            )));
+        }
+        self.fused_writes.push(node);
+        Ok(())
+    }
+
     pub fn commit(self) -> Result<Branch> {
         self.commit_with_fault(FaultPoint::None)
     }
 
     pub fn commit_with_fault(self, fault: FaultPoint) -> Result<Branch> {
-        let mut state = self.engine.state.write();
+        let Transaction {
+            engine,
+            branch,
+            expected_root,
+            expected_hybrid_root,
+            writes,
+            fused_writes,
+        } = self;
+        let mut state = engine.state.write();
         let current = state
             .branches
-            .get(&self.branch)
+            .get(&branch)
             .cloned()
-            .ok_or(Error::UnknownBranch(self.branch))?;
-        if current.root != self.expected_root {
-            return Err(Error::StaleTransaction(self.branch));
+            .ok_or(Error::UnknownBranch(branch))?;
+        if current.root != expected_root || current.hybrid_root != expected_hybrid_root {
+            return Err(Error::StaleTransaction(branch));
         }
         state.epoch += 1;
         let commit_epoch = state.epoch;
         let mut root = current.root;
-        for mut record in self.writes {
+        for mut record in writes {
             record.asserted_at = commit_epoch;
-            root =
-                self.engine
-                    .tree
-                    .insert(root, encode_record_key(&record), record.value.clone())?;
+            root = engine
+                .tree
+                .insert(root, encode_record_key(&record), record.value.clone())?;
+        }
+        let mut hybrid_root = current.hybrid_root;
+        let mut committed_hybrid_index = None;
+        if !fused_writes.is_empty() {
+            let mut hybrid_index =
+                engine.hybrid_index_owned(current.hybrid_root, state.fused_length)?;
+            hybrid_index.insert_uncommitted(commit_epoch, fused_writes)?;
+            let checkpoint = hybrid_index.checkpoint_bytes()?;
+            hybrid_root = Some(engine.checkpoints.append(&checkpoint)?);
+            committed_hybrid_index = Some(hybrid_index);
         }
         if fault == FaultPoint::AfterPageWrites {
             return Err(Error::InjectedFault("after page writes"));
         }
-        self.engine.store.sync()?;
+        engine.store.sync()?;
+        engine.fused_io.sync()?;
+        engine.checkpoints.sync()?;
         if fault == FaultPoint::AfterDataSync {
             return Err(Error::InjectedFault("after data sync"));
         }
-        self.engine.metadata.append(
+        let data_length = engine.store.io().len();
+        let fused_length = engine.fused_io.len();
+        let hnsw_length = engine.checkpoints.len()?;
+        engine.metadata.append(
             &MetadataEvent::Commit {
-                id: self.branch,
+                id: branch,
                 root,
+                hybrid_root,
                 epoch: commit_epoch,
-                data_length: self.engine.store.io().len(),
+                data_length,
+                fused_length,
+                hnsw_length,
             },
             fault == FaultPoint::DuringMetadataAppend,
         )?;
         if fault == FaultPoint::DuringMetadataAppend {
             return Err(Error::InjectedFault("during metadata append"));
         }
-        state.data_length = self.engine.store.io().len();
-        let branch_state = state.branches.get_mut(&self.branch).unwrap();
+        state.data_length = data_length;
+        state.fused_length = fused_length;
+        state.hnsw_length = hnsw_length;
+        let branch_state = state.branches.get_mut(&branch).unwrap();
         branch_state.root = root;
+        branch_state.hybrid_root = hybrid_root;
         branch_state.branch.root_hash = root.hash;
+        branch_state.branch.hybrid_root_hash = hybrid_root.map(|root| root.hash);
         branch_state.branch.epoch = commit_epoch;
+        if let (Some(root), Some(index)) = (hybrid_root, committed_hybrid_index) {
+            engine
+                .hybrid_cache
+                .write()
+                .insert(root.hash, Arc::new(index));
+        }
         Ok(branch_state.branch.clone())
     }
 }
@@ -523,6 +782,40 @@ fn validate_root(tree: &PersistentTree, store: &NodeStore, root: NodeRef) -> Res
         });
     }
     tree.validate(root)?;
+    Ok(())
+}
+
+fn validate_hybrid_root(
+    fused_io: &Arc<DirectIo>,
+    checkpoints: &CheckpointLog,
+    root: Option<CheckpointRoot>,
+    fused_length: u64,
+    hnsw_length: u64,
+    cache: &mut HashMap<Hash, Arc<HybridIndex>>,
+) -> Result<()> {
+    let Some(root) = root else {
+        return Ok(());
+    };
+    if root
+        .offset
+        .checked_add(root.length)
+        .is_none_or(|end| end > hnsw_length)
+    {
+        return Err(Error::CorruptMetadata {
+            offset: root.offset,
+            reason: "HNSW root exceeds event watermark".to_owned(),
+        });
+    }
+    let bytes = checkpoints.read(root)?;
+    if cache.contains_key(&root.hash) {
+        return Ok(());
+    }
+    let index = Arc::new(HybridIndex::from_checkpoint(
+        Arc::clone(fused_io),
+        &bytes,
+        fused_length,
+    )?);
+    cache.insert(root.hash, index);
     Ok(())
 }
 
@@ -622,30 +915,54 @@ enum MetadataEvent {
         parent: Option<Uuid>,
         root: NodeRef,
         fork_root: NodeRef,
+        hybrid_root: Option<CheckpointRoot>,
         epoch: u64,
         data_length: u64,
+        fused_length: u64,
+        hnsw_length: u64,
     },
     Commit {
         id: Uuid,
         root: NodeRef,
+        hybrid_root: Option<CheckpointRoot>,
         epoch: u64,
         data_length: u64,
+        fused_length: u64,
+        hnsw_length: u64,
     },
     Merge {
         target: Uuid,
         source: Uuid,
         root: NodeRef,
+        hybrid_root: Option<CheckpointRoot>,
         epoch: u64,
         data_length: u64,
+        fused_length: u64,
+        hnsw_length: u64,
     },
 }
 
 impl MetadataEvent {
-    fn data_length(&self) -> u64 {
+    fn watermarks(&self) -> (u64, u64, u64) {
         match self {
-            Self::Create { data_length, .. }
-            | Self::Commit { data_length, .. }
-            | Self::Merge { data_length, .. } => *data_length,
+            Self::Create {
+                data_length,
+                fused_length,
+                hnsw_length,
+                ..
+            }
+            | Self::Commit {
+                data_length,
+                fused_length,
+                hnsw_length,
+                ..
+            }
+            | Self::Merge {
+                data_length,
+                fused_length,
+                hnsw_length,
+                ..
+            } => (*data_length, *fused_length, *hnsw_length),
         }
     }
 }
@@ -803,10 +1120,13 @@ fn encode_event(event: &MetadataEvent) -> Vec<u8> {
             parent,
             root,
             fork_root,
+            hybrid_root,
             epoch,
             data_length,
+            fused_length,
+            hnsw_length,
         } => {
-            output.push(1);
+            output.push(4);
             output.extend_from_slice(id.as_bytes());
             output.push(parent.is_some() as u8);
             if let Some(parent) = parent {
@@ -814,34 +1134,49 @@ fn encode_event(event: &MetadataEvent) -> Vec<u8> {
             }
             put_ref(&mut output, *root);
             put_ref(&mut output, *fork_root);
+            put_checkpoint_root(&mut output, *hybrid_root);
             output.extend_from_slice(&epoch.to_le_bytes());
             output.extend_from_slice(&data_length.to_le_bytes());
+            output.extend_from_slice(&fused_length.to_le_bytes());
+            output.extend_from_slice(&hnsw_length.to_le_bytes());
         }
         MetadataEvent::Commit {
             id,
             root,
+            hybrid_root,
             epoch,
             data_length,
+            fused_length,
+            hnsw_length,
         } => {
-            output.push(2);
+            output.push(5);
             output.extend_from_slice(id.as_bytes());
             put_ref(&mut output, *root);
+            put_checkpoint_root(&mut output, *hybrid_root);
             output.extend_from_slice(&epoch.to_le_bytes());
             output.extend_from_slice(&data_length.to_le_bytes());
+            output.extend_from_slice(&fused_length.to_le_bytes());
+            output.extend_from_slice(&hnsw_length.to_le_bytes());
         }
         MetadataEvent::Merge {
             target,
             source,
             root,
+            hybrid_root,
             epoch,
             data_length,
+            fused_length,
+            hnsw_length,
         } => {
-            output.push(3);
+            output.push(6);
             output.extend_from_slice(target.as_bytes());
             output.extend_from_slice(source.as_bytes());
             put_ref(&mut output, *root);
+            put_checkpoint_root(&mut output, *hybrid_root);
             output.extend_from_slice(&epoch.to_le_bytes());
             output.extend_from_slice(&data_length.to_le_bytes());
+            output.extend_from_slice(&fused_length.to_le_bytes());
+            output.extend_from_slice(&hnsw_length.to_le_bytes());
         }
     }
     output
@@ -866,22 +1201,69 @@ fn decode_event(payload: &[u8]) -> Result<MetadataEvent> {
                 parent,
                 root: cursor.reference()?,
                 fork_root: cursor.reference()?,
+                hybrid_root: None,
                 epoch: u64::from_le_bytes(cursor.take::<8>()?),
                 data_length: u64::from_le_bytes(cursor.take::<8>()?),
+                fused_length: 0,
+                hnsw_length: 0,
             }
         }
         2 => MetadataEvent::Commit {
             id: Uuid::from_bytes(cursor.take::<16>()?),
             root: cursor.reference()?,
+            hybrid_root: None,
             epoch: u64::from_le_bytes(cursor.take::<8>()?),
             data_length: u64::from_le_bytes(cursor.take::<8>()?),
+            fused_length: 0,
+            hnsw_length: 0,
         },
         3 => MetadataEvent::Merge {
             target: Uuid::from_bytes(cursor.take::<16>()?),
             source: Uuid::from_bytes(cursor.take::<16>()?),
             root: cursor.reference()?,
+            hybrid_root: None,
             epoch: u64::from_le_bytes(cursor.take::<8>()?),
             data_length: u64::from_le_bytes(cursor.take::<8>()?),
+            fused_length: 0,
+            hnsw_length: 0,
+        },
+        4 => {
+            let id = Uuid::from_bytes(cursor.take::<16>()?);
+            let parent = match cursor.take::<1>()?[0] {
+                0 => None,
+                1 => Some(Uuid::from_bytes(cursor.take::<16>()?)),
+                _ => return Err(Error::Invariant("invalid parent marker".to_owned())),
+            };
+            MetadataEvent::Create {
+                id,
+                parent,
+                root: cursor.reference()?,
+                fork_root: cursor.reference()?,
+                hybrid_root: cursor.checkpoint_root()?,
+                epoch: u64::from_le_bytes(cursor.take::<8>()?),
+                data_length: u64::from_le_bytes(cursor.take::<8>()?),
+                fused_length: u64::from_le_bytes(cursor.take::<8>()?),
+                hnsw_length: u64::from_le_bytes(cursor.take::<8>()?),
+            }
+        }
+        5 => MetadataEvent::Commit {
+            id: Uuid::from_bytes(cursor.take::<16>()?),
+            root: cursor.reference()?,
+            hybrid_root: cursor.checkpoint_root()?,
+            epoch: u64::from_le_bytes(cursor.take::<8>()?),
+            data_length: u64::from_le_bytes(cursor.take::<8>()?),
+            fused_length: u64::from_le_bytes(cursor.take::<8>()?),
+            hnsw_length: u64::from_le_bytes(cursor.take::<8>()?),
+        },
+        6 => MetadataEvent::Merge {
+            target: Uuid::from_bytes(cursor.take::<16>()?),
+            source: Uuid::from_bytes(cursor.take::<16>()?),
+            root: cursor.reference()?,
+            hybrid_root: cursor.checkpoint_root()?,
+            epoch: u64::from_le_bytes(cursor.take::<8>()?),
+            data_length: u64::from_le_bytes(cursor.take::<8>()?),
+            fused_length: u64::from_le_bytes(cursor.take::<8>()?),
+            hnsw_length: u64::from_le_bytes(cursor.take::<8>()?),
         },
         _ => return Err(Error::Invariant("unknown metadata event".to_owned())),
     };
@@ -896,6 +1278,15 @@ fn decode_event(payload: &[u8]) -> Result<MetadataEvent> {
 fn put_ref(output: &mut Vec<u8>, reference: NodeRef) {
     output.extend_from_slice(&reference.hash.0);
     output.extend_from_slice(&reference.offset.to_le_bytes());
+}
+
+fn put_checkpoint_root(output: &mut Vec<u8>, root: Option<CheckpointRoot>) {
+    output.push(root.is_some() as u8);
+    if let Some(root) = root {
+        output.extend_from_slice(&root.hash.0);
+        output.extend_from_slice(&root.offset.to_le_bytes());
+        output.extend_from_slice(&root.length.to_le_bytes());
+    }
 }
 
 struct MetaCursor<'a> {
@@ -920,5 +1311,19 @@ impl MetaCursor<'_> {
             hash: Hash(self.take::<32>()?),
             offset: u64::from_le_bytes(self.take::<8>()?),
         })
+    }
+
+    fn checkpoint_root(&mut self) -> Result<Option<CheckpointRoot>> {
+        match self.take::<1>()?[0] {
+            0 => Ok(None),
+            1 => Ok(Some(CheckpointRoot {
+                hash: Hash(self.take::<32>()?),
+                offset: u64::from_le_bytes(self.take::<8>()?),
+                length: u64::from_le_bytes(self.take::<8>()?),
+            })),
+            _ => Err(Error::Invariant(
+                "invalid HNSW checkpoint marker".to_owned(),
+            )),
+        }
     }
 }
