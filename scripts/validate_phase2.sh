@@ -78,9 +78,23 @@ if command -v perf >/dev/null; then
     target/release/phase2-bench profile-fused \
     --data-dir "$scratch_dir/perf-fused"; then
     printf 'perf unavailable or denied by kernel policy\n' > "$metrics_dir/perf-unavailable.txt"
+  elif ! perf stat -x, -e cache-references,cache-misses \
+    -o "$metrics_dir/perf-split.csv" \
+    target/release/phase2-bench profile-split; then
+    printf 'perf split-layout run unavailable or denied by kernel policy\n' \
+      > "$metrics_dir/perf-unavailable.txt"
   fi
 else
   printf 'perf command unavailable\n' > "$metrics_dir/perf-unavailable.txt"
+fi
+
+if [[ -n "${POSTGRES_DSN:-}" ]]; then
+  python3 scripts/compare_phase2_products.py postgresql \
+    --output "$metrics_dir/postgresql-query-latency.csv"
+fi
+if [[ -n "${NEO4J_URI:-}" ]] && [[ -n "${NEO4J_PASSWORD:-}" ]] && [[ -n "${QDRANT_URL:-}" ]]; then
+  python3 scripts/compare_phase2_products.py neo4j-qdrant \
+    --output "$metrics_dir/neo4j-qdrant-query-latency.csv"
 fi
 
 if [[ -f "$metrics_dir/sift-recall.csv" ]]; then

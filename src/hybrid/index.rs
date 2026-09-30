@@ -55,6 +55,14 @@ struct RecordSnapshot {
     location: BlockLocation,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct VersionKey {
+    id: u64,
+    assertion_time: u64,
+    valid_from: i64,
+    valid_to: i64,
+}
+
 struct QueryContext<'a> {
     io: &'a DirectIo<FUSED_BLOCK_SIZE>,
     blocks: HashMap<u64, Arc<AlignedBlock<FUSED_BLOCK_SIZE>>>,
@@ -90,6 +98,7 @@ pub struct HybridIndex {
     metric: DistanceMetric,
     hnsw: HnswIndex,
     locations: HashMap<u64, Vec<BlockLocation>>,
+    versions: HashSet<VersionKey>,
     committed_length: u64,
     generation: u64,
 }
@@ -142,6 +151,7 @@ impl HybridIndex {
             metric,
             hnsw: HnswIndex::new(metric, config)?,
             locations: HashMap::new(),
+            versions: HashSet::new(),
             committed_length: manifest.committed_length,
             generation: manifest.generation,
         };
@@ -186,8 +196,21 @@ impl HybridIndex {
         if records.is_empty() {
             return Ok(0);
         }
+        let mut staged_versions = HashSet::with_capacity(records.len());
         for record in &records {
             record.validate(self.dimension)?;
+            let version = VersionKey {
+                id: record.id,
+                assertion_time: record.assertion_time,
+                valid_from: record.valid_from,
+                valid_to: record.valid_to,
+            };
+            if self.versions.contains(&version) || !staged_versions.insert(version) {
+                return Err(Error::Invariant(format!(
+                    "duplicate fused record version for ID {}",
+                    record.id
+                )));
+            }
         }
         let mut encoded = Vec::new();
         let mut cursor = 0;
@@ -205,14 +228,25 @@ impl HybridIndex {
 
         let mut appended = Vec::with_capacity(encoded.len());
         for block in encoded {
-            let offset = self.io.append(&block)?;
+            let offset = match self.io.append(&block) {
+                Ok(offset) => offset,
+                Err(error) => {
+                    self.rollback_tail()?;
+                    return Err(error);
+                }
+            };
             appended.push((offset, block));
         }
         if fault == HybridFaultPoint::AfterBlockWrites {
+            self.rollback_tail()?;
             return Err(Error::InjectedFault("after fused-block writes"));
         }
-        self.io.sync()?;
+        if let Err(error) = self.io.sync() {
+            self.rollback_tail()?;
+            return Err(error);
+        }
         if fault == HybridFaultPoint::AfterBlockSync {
+            self.rollback_tail()?;
             return Err(Error::InjectedFault("after fused-block sync"));
         }
         let new_length = self.io.len();
@@ -222,12 +256,16 @@ impl HybridIndex {
             committed_length: new_length,
             generation: self.generation + 1,
         };
-        write_manifest(
+        if let Err(error) = write_manifest(
             &self.directory,
             &manifest,
             fault == HybridFaultPoint::DuringManifestWrite,
-        )?;
+        ) {
+            self.rollback_tail()?;
+            return Err(error);
+        }
         if fault == HybridFaultPoint::DuringManifestWrite {
+            self.rollback_tail()?;
             return Err(Error::InjectedFault("during fused manifest write"));
         }
         self.committed_length = new_length;
@@ -251,39 +289,47 @@ impl HybridIndex {
             ));
         }
         let query = QuantizedVector::encode(query)?;
-        let candidates = self.hnsw.search(
-            &query,
-            self.hnsw.len().min(count.saturating_mul(32).max(128)),
-            None,
-        );
+        let has_versions = self.locations.values().any(|locations| locations.len() > 1);
+        let mut requested = if has_versions {
+            self.hnsw.len()
+        } else {
+            self.hnsw.len().min(count.saturating_mul(32).max(128))
+        };
         let mut context = QueryContext::new(&self.io);
-        let mut seen = HashSet::new();
-        let mut hits = Vec::new();
-        for candidate in candidates {
-            if !seen.insert(candidate.id) {
-                continue;
+        let (hits, visited_records) = loop {
+            let candidates = self.hnsw.search(&query, requested, Some(requested));
+            let mut seen = HashSet::new();
+            let mut hits = Vec::new();
+            for candidate in candidates {
+                if !seen.insert(candidate.id) {
+                    continue;
+                }
+                let Some(snapshot) =
+                    self.snapshot_at(candidate.id, valid_at, asserted_before, &mut context)?
+                else {
+                    continue;
+                };
+                let distance = query.distance(&snapshot.vector, self.metric);
+                hits.push(QueryHit {
+                    id: snapshot.metadata.id,
+                    distance,
+                    similarity: cosine_similarity(&query, &snapshot.vector),
+                    depth: 0,
+                    assertion_time: snapshot.metadata.assertion_time,
+                    block_offset: snapshot.location.block_offset,
+                });
             }
-            let Some(snapshot) =
-                self.snapshot_at(candidate.id, valid_at, asserted_before, &mut context)?
-            else {
-                continue;
-            };
-            let distance = query.distance(&snapshot.vector, self.metric);
-            hits.push(QueryHit {
-                id: snapshot.metadata.id,
-                distance,
-                similarity: cosine_similarity(&query, &snapshot.vector),
-                depth: 0,
-                assertion_time: snapshot.metadata.assertion_time,
-                block_offset: snapshot.location.block_offset,
-            });
-        }
-        hits.sort_by(|left, right| left.distance.total_cmp(&right.distance));
-        hits.truncate(count);
+            hits.sort_by(|left, right| left.distance.total_cmp(&right.distance));
+            if hits.len() >= count || requested >= self.hnsw.len() {
+                hits.truncate(count);
+                break (hits, seen.len());
+            }
+            requested = self.hnsw.len().min(requested.saturating_mul(2));
+        };
         Ok(QueryResult {
             hits,
             stats: QueryStats {
-                visited_records: seen.len(),
+                visited_records,
                 physical_block_reads: context.reads,
             },
         })
@@ -357,14 +403,8 @@ impl HybridIndex {
         let mut offset = 0;
         while offset < self.io.len() {
             let block = self.io.read(offset)?;
-            match FusedBlockView::parse(block.as_slice()) {
-                Ok(_) => self.register_block(offset, block.as_slice())?,
-                Err(_) if offset + FUSED_BLOCK_SIZE as u64 == self.io.len() => {
-                    self.io.truncate(offset)?;
-                    break;
-                }
-                Err(error) => return Err(error),
-            }
+            FusedBlockView::parse(block.as_slice())?;
+            self.register_block(offset, block.as_slice())?;
             offset += FUSED_BLOCK_SIZE as u64;
         }
         Ok(())
@@ -381,6 +421,18 @@ impl HybridIndex {
         }
         for slot in 0..block.len() {
             let record = block.record(slot)?;
+            let version = VersionKey {
+                id: record.id(),
+                assertion_time: record.assertion_time(),
+                valid_from: record.valid_from(),
+                valid_to: record.valid_to(),
+            };
+            if !self.versions.insert(version) {
+                return Err(Error::Invariant(format!(
+                    "duplicate fused record version for ID {}",
+                    record.id()
+                )));
+            }
             let location = BlockLocation {
                 block_offset: offset,
                 slot: slot as u16,
@@ -394,6 +446,11 @@ impl HybridIndex {
                 .push(location);
         }
         Ok(())
+    }
+
+    fn rollback_tail(&self) -> Result<()> {
+        self.io.truncate(self.committed_length)?;
+        self.io.sync()
     }
 
     fn snapshot_at(

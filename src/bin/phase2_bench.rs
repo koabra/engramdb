@@ -7,8 +7,8 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use engramdb::{
-    selected_simd_flavor, DirectIo, DistanceMetric, FusedBlockBuilder, GraphEdge, HnswConfig,
-    HybridIndex, HybridRecord, FUSED_BLOCK_SIZE,
+    dot_i8, selected_simd_flavor, DirectIo, DistanceMetric, FusedBlockBuilder, FusedBlockView,
+    GraphEdge, HnswConfig, HybridIndex, HybridRecord, FUSED_BLOCK_SIZE,
 };
 
 fn main() {
@@ -149,7 +149,14 @@ fn query(arguments: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         DistanceMetric::Cosine,
         HnswConfig::default(),
     )?;
-    let records = synthetic_records(nodes, dimension, 10);
+    let mut records = synthetic_records(nodes, dimension, 10);
+    for id in (0..nodes).step_by(10) {
+        let mut revision = records[id].clone();
+        revision.assertion_time = 20;
+        revision.vector.fill(0.0);
+        revision.vector[(id + 1) % dimension.min(32)] = 1.0;
+        records.push(revision);
+    }
     index.insert(1, records)?;
     let mut writer = output_writer(&output)?;
     writeln!(
@@ -230,21 +237,58 @@ fn storage(arguments: &[String]) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn profile_fused(arguments: &[String]) -> Result<(), Box<dyn std::error::Error>> {
-    let data_dir = required_path(arguments, "--data-dir")?;
-    reset_directory(&data_dir)?;
+    let _data_dir = required_path(arguments, "--data-dir")?;
     let dimension = 128;
-    let mut index = HybridIndex::open(
-        &data_dir,
-        dimension,
-        DistanceMetric::Cosine,
-        HnswConfig::default(),
-    )?;
-    index.insert(1, synthetic_records(2_000, dimension, 10))?;
+    let records = synthetic_records(2_000, dimension, 10);
+    let mut blocks = Vec::new();
+    let mut locations = std::collections::HashMap::new();
+    let mut cursor = 0;
+    while cursor < records.len() {
+        let mut builder = FusedBlockBuilder::new(1, dimension)?;
+        while cursor < records.len() {
+            if builder.try_push(records[cursor].clone())? {
+                cursor += 1;
+            } else {
+                break;
+            }
+        }
+        let block = builder.finish()?;
+        let block_index = blocks.len();
+        let view = FusedBlockView::parse(block.as_slice())?;
+        for slot in 0..view.len() {
+            locations.insert(view.record(slot)?.id(), (block_index, slot));
+        }
+        blocks.push(block);
+    }
     for query_id in 0..500 {
         let root = (query_id * 37 % 2_000) as u64;
-        let mut query = vec![0.0; dimension];
-        query[root as usize % 32] = 1.0;
-        black_box(index.traverse(root, &query, 3, 0.8, 500, 10, |_| true)?);
+        let mut query = vec![0_i8; dimension];
+        query[root as usize % 32] = 127;
+        let query_norm = 127.0_f32;
+        let mut pending = std::collections::VecDeque::from([(root, 0)]);
+        let mut visited = HashSet::new();
+        let mut score = 0.0_f32;
+        while let Some((id, depth)) = pending.pop_front() {
+            if depth > 3 || !visited.insert(id) {
+                continue;
+            }
+            let (block, slot) = locations[&id];
+            let view = FusedBlockView::parse(blocks[block].as_slice())?;
+            let record = view.record(slot)?;
+            let vector = record.quantized_vector();
+            let norm = vector
+                .iter()
+                .map(|value| f32::from(*value).powi(2))
+                .sum::<f32>()
+                .sqrt();
+            score += dot_i8(&query, vector) as f32 / (query_norm * norm);
+            if depth < 3 {
+                for edge in record.edges() {
+                    pending.push_back((edge.target, depth + 1));
+                }
+            }
+        }
+        black_box(score);
     }
     Ok(())
 }
@@ -294,7 +338,7 @@ fn synthetic_records(nodes: usize, dimension: usize, edges: usize) -> Vec<Hybrid
                 vector,
                 edges: (1..=edges)
                     .map(|step| GraphEdge {
-                        target: ((id + step) % nodes) as u64,
+                        target: graph_target(id, step, nodes) as u64,
                         weight: 1.0,
                         edge_type: 1,
                     })
@@ -302,6 +346,13 @@ fn synthetic_records(nodes: usize, dimension: usize, edges: usize) -> Vec<Hybrid
             }
         })
         .collect()
+}
+
+fn graph_target(id: usize, step: usize, nodes: usize) -> usize {
+    let mixed = (id as u64)
+        .wrapping_mul(6_364_136_223_846_793_005)
+        .wrapping_add((step as u64).wrapping_mul(1_442_695_040_888_963_407));
+    (mixed % nodes as u64) as usize
 }
 
 fn read_fvecs(path: &Path, limit: usize) -> io::Result<Vec<Vec<f32>>> {
