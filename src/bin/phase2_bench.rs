@@ -239,7 +239,7 @@ fn storage(arguments: &[String]) -> Result<(), Box<dyn std::error::Error>> {
 fn profile_fused(arguments: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     let _data_dir = required_path(arguments, "--data-dir")?;
     let dimension = 128;
-    let records = synthetic_records(2_000, dimension, 10);
+    let records = synthetic_records(10_000, dimension, 10);
     let mut blocks = Vec::new();
     let mut locations = std::collections::HashMap::new();
     let mut cursor = 0;
@@ -270,8 +270,8 @@ fn profile_fused_queries(
     locations: &std::collections::HashMap<u64, (usize, usize)>,
     dimension: usize,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    for query_id in 0..500 {
-        let root = (query_id * 37 % 2_000) as u64;
+    for query_id in 0..100 {
+        let root = (query_id * 37 % 10_000) as u64;
         let mut query = vec![0_i8; dimension];
         query[root as usize % 32] = 127;
         let query_norm = 127.0_f32;
@@ -305,7 +305,7 @@ fn profile_fused_queries(
 
 fn profile_split(_arguments: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     let dimension = 128;
-    let records = synthetic_records(2_000, dimension, 10);
+    let records = synthetic_records(10_000, dimension, 10);
     let by_id = records
         .into_iter()
         .map(|record| (record.id, Box::new(record)))
@@ -319,8 +319,8 @@ fn profile_split_queries(
     by_id: &std::collections::HashMap<u64, Box<HybridRecord>>,
     dimension: usize,
 ) {
-    for query_id in 0..500 {
-        let root = (query_id * 37 % 2_000) as u64;
+    for query_id in 0..100 {
+        let root = (query_id * 37 % 10_000) as u64;
         let mut query = vec![0.0; dimension];
         query[root as usize % 32] = 1.0;
         let mut pending = std::collections::VecDeque::from([(root, 0)]);
