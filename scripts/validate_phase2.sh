@@ -90,13 +90,13 @@ cargo run --release --bin phase2_bench -- \
   fi
   if command -v valgrind >/dev/null 2>&1; then
     printf 'cachegrind=available\n'
-    valgrind --tool=cachegrind --branch-sim=yes \
+    valgrind --tool=cachegrind --cache-sim=yes --branch-sim=yes \
       --cachegrind-out-file="$metrics_dir/cachegrind-fused.out" \
       target/release/phase2_bench \
         cache-layout --layout fused \
         --output "$scratch_dir/cachegrind-fused.csv" --iterations 1000 \
       2> "$metrics_dir/cachegrind-fused.txt" || printf 'cachegrind_fused_run=failed\n'
-    valgrind --tool=cachegrind --branch-sim=yes \
+    valgrind --tool=cachegrind --cache-sim=yes --branch-sim=yes \
       --cachegrind-out-file="$metrics_dir/cachegrind-pointer.out" \
       target/release/phase2_bench \
         cache-layout --layout pointer \
