@@ -1,8 +1,8 @@
 # EngramDB
 
-EngramDB Phase 2 is a Linux-only prototype that combines the Phase 1
-content-addressed storage foundation with 64 KiB fused vector, graph, and
-temporal blocks. Query execution remains reserved for Phase 3.
+EngramDB Phase 3 is a Linux-only prototype that combines content-addressed,
+copy-on-write storage with 64 KiB fused vector/graph/temporal blocks, EnQL
+planning, and Apache Arrow Flight sessions.
 
 ## Storage model
 
@@ -49,6 +49,34 @@ let record = engine.get(child.id, b"agent:7", 50)?;
 # Ok::<(), engramdb::Error>(())
 ```
 
+## EnQL and Arrow Flight
+
+Start the server:
+
+```bash
+cargo run --release --bin engramdb_server -- \
+  --data-dir /var/lib/engramdb --address 127.0.0.1:50051
+```
+
+Install and use the Python SDK:
+
+```bash
+python -m pip install -e ./python
+python - <<'PY'
+from engramdb import EngramClient
+
+client = EngramClient()
+session = client.fork_session(client.main_branch())
+table = client.query("VECTOR NEAREST [1.0,0.0] LIMIT 10", session)
+print(table)
+PY
+```
+
+EnQL supports nearest-vector queries and bounded Cypher-style traversals with
+cosine, assertion-time, valid-time, edge-type, and `AS OF SYSTEM TIME`
+predicates. `EXPLAIN` is available through the Flight action API and Python
+client.
+
 `Engine::get_as_of` supports assertion-time reads. `Engine::merge` performs a
 three-way merge for non-overlapping temporal ranges and rejects overlapping,
 different updates.
@@ -90,3 +118,13 @@ The directory must contain `sift_base.fvecs`, `sift_query.fvecs`, and
 pipeline on a deterministic synthetic corpus. Raw measurements and plots are
 under [`metrics/phase2/`](metrics/phase2/); interpretation and limitations are
 in [`docs/phase2-validation.md`](docs/phase2-validation.md).
+
+Run the Phase 3 parser, Arrow, Flight, Python allocation, ingestion, session,
+and regression plan:
+
+```bash
+./scripts/validate_phase3.sh
+```
+
+Results and limitations are documented in
+[`docs/phase3-validation.md`](docs/phase3-validation.md).

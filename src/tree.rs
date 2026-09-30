@@ -236,7 +236,7 @@ impl PersistentTree {
                 mut children,
             } => {
                 let child_index =
-                    separators.partition_point(|separator| key.as_slice() >= separator);
+                    separators.partition_point(|separator| key.as_slice() >= separator.as_slice());
                 let inserted = self.insert_at(children[child_index], key, value)?;
                 children[child_index] = inserted.left;
                 if let Some((separator, right)) = inserted.split {

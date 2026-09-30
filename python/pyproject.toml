@@ -1,0 +1,14 @@
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "engramdb"
+version = "0.1.0"
+description = "Arrow Flight client for EngramDB"
+requires-python = ">=3.10"
+dependencies = ["pyarrow"]
+
+[project.optional-dependencies]
+pandas = ["pandas"]
+polars = ["polars"]
