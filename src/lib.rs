@@ -1,4 +1,4 @@
-//! EngramDB Phase 3: fused hybrid storage with EnQL and Arrow Flight.
+//! EngramDB Phase 4: fused hybrid storage with inference-cache streaming.
 //!
 //! The public surface is intentionally small. [`Engine`] owns durable pages and
 //! branch metadata; callers mutate a branch through a [`Transaction`].
