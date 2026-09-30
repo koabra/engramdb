@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use arrow::array::{Array, FixedSizeListArray, ListArray};
+use arrow::array::{FixedSizeListArray, ListArray};
 use arrow_flight::decode::FlightRecordBatchStream;
 use arrow_flight::error::FlightError;
 use arrow_flight::flight_service_server::FlightService;
@@ -126,9 +126,18 @@ fn fused_projection_maps_to_nested_arrow_arrays() {
     assert!(batch
         .column_by_name("vector")
         .unwrap()
+        .as_any()
         .is::<FixedSizeListArray>());
-    assert!(batch.column_by_name("temporal").unwrap().is::<ListArray>());
-    assert!(batch.column_by_name("edges").unwrap().is::<ListArray>());
+    assert!(batch
+        .column_by_name("temporal")
+        .unwrap()
+        .as_any()
+        .is::<ListArray>());
+    assert!(batch
+        .column_by_name("edges")
+        .unwrap()
+        .as_any()
+        .is::<ListArray>());
 }
 
 #[test]
