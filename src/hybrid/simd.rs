@@ -122,8 +122,8 @@ pub(crate) fn dot_scalar(left: &[i8], right: &[i8]) -> i64 {
 #[target_feature(enable = "avx512f,avx512bw")]
 unsafe fn dot_avx512(left: &[i8], right: &[i8]) -> i64 {
     use std::arch::x86_64::{
-        __m128i, __m512i, _mm512_add_epi32, _mm512_cvtepi8_epi32, _mm512_loadu_si512,
-        _mm512_mullo_epi32, _mm512_setzero_si512, _mm512_storeu_si512, _mm_loadu_si128,
+        __m128i, __m512i, _mm512_add_epi32, _mm512_cvtepi8_epi32, _mm512_mullo_epi32,
+        _mm512_setzero_si512, _mm512_storeu_si512, _mm_loadu_si128,
     };
 
     let mut index = 0;
