@@ -29,6 +29,10 @@ pub enum Error {
     InvalidQuery(String),
     #[error("Arrow conversion failed: {0}")]
     Arrow(String),
+    #[error("KV-cache format or integrity error: {0}")]
+    KvCache(String),
+    #[error("requested hardware path is unavailable: {0}")]
+    HardwareUnavailable(String),
     #[error("branch {0} does not exist")]
     UnknownBranch(Uuid),
     #[error("branch {0} changed while the transaction was open")]

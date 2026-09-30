@@ -9,7 +9,8 @@ use uuid::Uuid;
 
 use crate::{
     execute, explain, optimize, parse_enql, plan_logical, projections_to_batch,
-    query_rows_to_batches, CatalogStats, Engine, Error, FusedNode, Result,
+    query_rows_to_batches, CatalogStats, Engine, Error, FusedNode, HardwareCapabilities,
+    InferenceManager, KvCacheManifest, KvCacheSnapshot, KvCacheSpec, KvRestoreTicket, Result,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -27,6 +28,7 @@ pub struct Session {
 
 pub struct SessionManager {
     engine: Arc<Engine>,
+    inference: Option<Arc<InferenceManager>>,
     sessions: RwLock<HashMap<Uuid, Session>>,
 }
 
@@ -34,6 +36,15 @@ impl SessionManager {
     pub fn new(engine: Arc<Engine>) -> Self {
         Self {
             engine,
+            inference: None,
+            sessions: RwLock::new(HashMap::new()),
+        }
+    }
+
+    pub fn new_with_inference(engine: Arc<Engine>, inference: Arc<InferenceManager>) -> Self {
+        Self {
+            engine,
+            inference: Some(inference),
             sessions: RwLock::new(HashMap::new()),
         }
     }
@@ -44,6 +55,9 @@ impl SessionManager {
 
     pub fn fork_session(&self, parent_id: Uuid) -> Result<Session> {
         let branch = self.engine.fork(parent_id)?;
+        if let Some(inference) = &self.inference {
+            inference.inherit(parent_id, branch.id)?;
+        }
         let session = Session {
             id: branch.id,
             parent_id,
@@ -128,6 +142,30 @@ impl SessionManager {
         projections_to_batch(&self.engine.hybrid_projections(session_id)?)
     }
 
+    pub fn put_kv_cache(
+        &self,
+        session_id: Uuid,
+        spec: KvCacheSpec,
+        bytes: &[u8],
+    ) -> Result<KvCacheManifest> {
+        self.require_active(session_id)?;
+        self.inference()?.put(session_id, spec, bytes)
+    }
+
+    pub fn get_kv_cache(&self, session_id: Uuid) -> Result<Option<KvCacheSnapshot>> {
+        self.engine.branch(session_id)?;
+        self.inference()?.get(session_id)
+    }
+
+    pub fn kv_restore_ticket(&self, session_id: Uuid) -> Result<Option<KvRestoreTicket>> {
+        self.engine.branch(session_id)?;
+        self.inference()?.restore_ticket(session_id)
+    }
+
+    pub fn hardware_capabilities(&self) -> Result<&HardwareCapabilities> {
+        Ok(self.inference()?.capabilities())
+    }
+
     pub fn session(&self, session_id: Uuid) -> Option<Session> {
         self.sessions.read().get(&session_id).copied()
     }
@@ -143,5 +181,11 @@ impl SessionManager {
             )));
         }
         Ok(())
+    }
+
+    fn inference(&self) -> Result<&Arc<InferenceManager>> {
+        self.inference.as_ref().ok_or_else(|| {
+            Error::HardwareUnavailable("server was started without KV-cache storage".to_owned())
+        })
     }
 }

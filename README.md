@@ -1,8 +1,8 @@
 # EngramDB
 
-EngramDB Phase 3 is a Linux-only prototype that combines content-addressed,
-copy-on-write storage with 64 KiB fused vector/graph/temporal blocks, EnQL
-planning, and Apache Arrow Flight sessions.
+EngramDB Phase 4 is a Linux-only prototype that combines content-addressed,
+copy-on-write storage with fused vector/graph/temporal blocks, EnQL, Arrow
+Flight sessions, and branch-scoped LLM KV-cache persistence.
 
 ## Storage model
 
@@ -77,6 +77,27 @@ cosine, assertion-time, valid-time, edge-type, and `AS OF SYSTEM TIME`
 predicates. `EXPLAIN` is available through the Flight action API and Python
 client.
 
+## KV-cache and inference adapters
+
+The Python SDK exposes branch-scoped KV-cache upload/restore and integration
+surfaces for vLLM and SGLang:
+
+```python
+from engramdb import EngramClient, VllmKvCacheAdapter
+
+client = EngramClient()
+session = client.fork_session(client.main_branch())
+adapter = VllmKvCacheAdapter(client)
+adapter.store(session, spec, cache_tensor)
+cache_bytes, restored_spec = adapter.restore_bytes(session)
+```
+
+KV data is stored in 4 MiB transfer blocks with 4 KiB-aligned payload extents,
+CRC32/BLAKE3 integrity, and a transactional watermark journal. The default path
+is CPU `O_DIRECT`. Build with `--features gds` to enable runtime `libcufile`
+loading; successful compilation or library loading is not treated as proof of
+direct NVMe-to-GPU DMA. `HardwareCapabilities` reports the selected path.
+
 `Engine::get_as_of` supports assertion-time reads. `Engine::merge` performs a
 three-way merge for non-overlapping temporal ranges and rejects overlapping,
 different updates.
@@ -128,3 +149,14 @@ and regression plan:
 
 Results and limitations are documented in
 [`docs/phase3-validation.md`](docs/phase3-validation.md).
+
+Run the Phase 4 format, integrity, capability, fallback-bandwidth, inference
+adapter, and regression plan:
+
+```bash
+./scripts/validate_phase4.sh
+```
+
+On GPU/GDS hosts, set external comparison commands as documented in
+[`docs/phase4-validation.md`](docs/phase4-validation.md). CPU simulations and
+unverified targets are never reported as measured GDS results.

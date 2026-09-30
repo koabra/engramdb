@@ -1,3 +1,3 @@
 plan,iterations,elapsed_ns,plans_per_s
-graph_first,100000,92242582,1084098.015
-vector_first,100000,89491490,1117424.685
+graph_first,100000,144530878,691893.673
+vector_first,100000,142007782,704186.761
