@@ -132,26 +132,10 @@ pub fn projections_to_batch(projections: &[NodeProjection]) -> Result<RecordBatc
     let edge_array = edges.finish();
     let schema = Arc::new(Schema::new(vec![
         Field::new("id", DataType::FixedSizeBinary(32), false),
-        Field::new(
-            "temporal",
-            DataType::List(Arc::new(Field::new(
-                "item",
-                DataType::Struct(temporal_fields),
-                false,
-            ))),
-            false,
-        ),
+        Field::new("temporal", temporal_array.data_type().clone(), false),
         Field::new("vector", vector_array.data_type().clone(), false),
         Field::new("quantization_scale", DataType::Float32, false),
-        Field::new(
-            "edges",
-            DataType::List(Arc::new(Field::new(
-                "item",
-                DataType::Struct(edge_fields),
-                false,
-            ))),
-            false,
-        ),
+        Field::new("edges", edge_array.data_type().clone(), false),
     ]));
     RecordBatch::try_new(
         schema,

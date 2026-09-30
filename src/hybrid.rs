@@ -698,8 +698,9 @@ impl HybridIndex {
                 let Some(target) = self.by_id.get(&edge.target).copied() else {
                     continue;
                 };
-                if !visited.contains_key(&edge.target) {
-                    visited.insert(edge.target, depth + 1);
+                if let std::collections::hash_map::Entry::Vacant(entry) = visited.entry(edge.target)
+                {
+                    entry.insert(depth + 1);
                     queue.push_back((target, depth + 1));
                 }
             }
