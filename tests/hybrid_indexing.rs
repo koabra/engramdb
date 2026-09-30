@@ -2,7 +2,7 @@ use std::collections::HashSet;
 
 use engramdb::{
     dot_i8, FusedBlockBuilder, FusedBlockView, FusedNode, GraphEdge, Hash, HybridIndex,
-    TemporalPoint, TriModalQuery,
+    TemporalPoint, TriModalQuery, VectorMetric,
 };
 use tempfile::tempdir;
 
@@ -117,6 +117,28 @@ fn hnsw_recall_exceeds_phase2_threshold_and_survives_reopen() {
     assert_eq!(
         reopened.nearest(&generated_vector(17, 64), 1).unwrap()[0].id,
         Hash(*blake3::hash(b"item-17").as_bytes())
+    );
+}
+
+#[test]
+fn squared_l2_metric_ranks_by_distance() {
+    let directory = tempdir().unwrap();
+    let mut index =
+        HybridIndex::open_with_metric(directory.path().join("fused.dat"), VectorMetric::SquaredL2)
+            .unwrap();
+    index
+        .insert(
+            1,
+            vec![
+                node("origin", vec![0.0, 0.0]),
+                node("near", vec![8.0, 0.0]),
+                node("far", vec![-10.0, 0.0]),
+            ],
+        )
+        .unwrap();
+    assert_eq!(
+        index.nearest(&[9.0, 0.0], 1).unwrap()[0].id,
+        Hash(*blake3::hash(b"near").as_bytes())
     );
 }
 

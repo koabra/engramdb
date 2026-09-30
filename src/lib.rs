@@ -28,6 +28,7 @@ pub use fused::{
 pub use hazard::{HazardAtomic, HazardDomain, HazardGuard};
 pub use hybrid::{
     BlockRef, HybridIndex, HybridIndexStats, SearchResult, TraversalMatch, TriModalQuery,
+    VectorMetric,
 };
 pub use io::{
     AlignedPage, BlockLayout, DirectIo, IoStats, FUSED_BLOCK_LAYOUT, FUSED_BLOCK_SIZE, PAGE_LAYOUT,
