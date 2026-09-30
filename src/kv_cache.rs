@@ -409,7 +409,8 @@ fn encode_block(
     bytes[20..24].copy_from_slice(&(payload.len() as u32).to_le_bytes());
     bytes[24..56].copy_from_slice(&spec_hash.0);
     bytes[56..60].copy_from_slice(&crc32fast::hash(payload).to_le_bytes());
-    bytes[60..64].copy_from_slice(&crc32fast::hash(&bytes[..60]).to_le_bytes());
+    let header_crc = crc32fast::hash(&bytes[..60]);
+    bytes[60..64].copy_from_slice(&header_crc.to_le_bytes());
     bytes[KV_HEADER_SIZE..KV_HEADER_SIZE + payload.len()].copy_from_slice(payload);
     Ok(block)
 }

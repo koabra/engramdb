@@ -39,25 +39,24 @@ impl HardwareCapabilities {
             .unwrap_or(nvidia_driver);
         let gdsio_path = executable_on_path("gdsio");
         let mut notes = Vec::new();
-        let mut libcufile_path = None;
-        let mut cufile_driver_opened = false;
-
         #[cfg(feature = "gds")]
-        {
-            match GdsApi::probe() {
-                Ok((path, opened)) => {
-                    libcufile_path = Some(path);
-                    cufile_driver_opened = opened;
-                    notes.push(
-                        "libcufile symbols loaded; direct P2P was not verified by I/O stats"
-                            .to_owned(),
-                    );
-                }
-                Err(error) => notes.push(error.to_string()),
+        let (libcufile_path, cufile_driver_opened) = match GdsApi::probe() {
+            Ok((path, opened)) => {
+                notes.push(
+                    "libcufile symbols loaded; direct P2P was not verified by I/O stats".to_owned(),
+                );
+                (Some(path), opened)
             }
-        }
+            Err(error) => {
+                notes.push(error.to_string());
+                (None, false)
+            }
+        };
         #[cfg(not(feature = "gds"))]
-        notes.push("binary compiled without the optional `gds` feature".to_owned());
+        let (libcufile_path, cufile_driver_opened) = {
+            notes.push("binary compiled without the optional `gds` feature".to_owned());
+            (None, false)
+        };
 
         let transfer_path =
             if libcufile_path.is_some() && cufile_driver_opened && nvidia_driver && nvidia_fs {
