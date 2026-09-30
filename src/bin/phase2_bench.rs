@@ -75,7 +75,7 @@ fn sift(arguments: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         HnswConfig {
             max_connections: 16,
             ef_construction: 128,
-            ef_search: 512,
+            ef_search: 1024,
         },
     )?;
     let build_started = Instant::now();

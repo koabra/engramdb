@@ -100,6 +100,10 @@ impl HnswIndex {
         self.nodes.len()
     }
 
+    pub fn ef_search(&self) -> usize {
+        self.config.ef_search
+    }
+
     pub fn insert(
         &mut self,
         index_key: u64,
