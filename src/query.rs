@@ -394,7 +394,6 @@ fn parse_u16_at(input: &str, position: usize) -> Result<u16> {
 
 fn next_token(input: &str, position: usize) -> Result<&str> {
     input[position..]
-        .trim_start()
         .split_whitespace()
         .next()
         .map(|token| token.trim_matches(|character: char| ",;)".contains(character)))
