@@ -17,7 +17,9 @@ pub enum SimdFlavor {
 pub(crate) struct QuantizedVector {
     pub values: Vec<i8>,
     pub scale: f32,
+    pub zero_point: f32,
     pub norm_sq: i64,
+    pub sum: i64,
 }
 
 impl QuantizedVector {
@@ -27,59 +29,80 @@ impl QuantizedVector {
                 "vectors must be non-empty and contain finite values".to_owned(),
             ));
         }
-        let max_abs = vector
-            .iter()
-            .fold(0.0_f32, |maximum, value| maximum.max(value.abs()));
-        let scale = if max_abs == 0.0 { 1.0 } else { max_abs / 127.0 };
+        let (minimum, maximum) = vector.iter().fold(
+            (f32::INFINITY, f32::NEG_INFINITY),
+            |(minimum, maximum), value| (minimum.min(*value), maximum.max(*value)),
+        );
+        let scale = if maximum == minimum {
+            1.0
+        } else {
+            (maximum - minimum) / 254.0
+        };
+        let zero_point = (maximum + minimum) * 0.5;
         let values = vector
             .iter()
-            .map(|value| (value / scale).round().clamp(-127.0, 127.0) as i8)
+            .map(|value| ((value - zero_point) / scale).round().clamp(-127.0, 127.0) as i8)
             .collect::<Vec<_>>();
         let norm_sq = values
             .iter()
             .map(|value| i64::from(*value) * i64::from(*value))
             .sum();
+        let sum = values.iter().map(|value| i64::from(*value)).sum();
         Ok(Self {
             values,
             scale,
+            zero_point,
             norm_sq,
+            sum,
         })
     }
 
-    pub fn from_parts(values: &[i8], scale: f32) -> Result<Self> {
-        if values.is_empty() || !scale.is_finite() || scale <= 0.0 {
+    pub fn from_parts(values: &[i8], scale: f32, zero_point: f32) -> Result<Self> {
+        if values.is_empty() || !scale.is_finite() || scale <= 0.0 || !zero_point.is_finite() {
             return Err(Error::Invariant(
-                "invalid quantized vector scale or dimension".to_owned(),
+                "invalid quantized vector scale, zero point, or dimension".to_owned(),
             ));
         }
         let norm_sq = values
             .iter()
             .map(|value| i64::from(*value) * i64::from(*value))
             .sum();
+        let sum = values.iter().map(|value| i64::from(*value)).sum();
         Ok(Self {
             values: values.to_vec(),
             scale,
+            zero_point,
             norm_sq,
+            sum,
         })
     }
 
     pub fn distance(&self, other: &Self, metric: DistanceMetric) -> f32 {
         debug_assert_eq!(self.values.len(), other.values.len());
         let dot = dot_i8(&self.values, &other.values) as f64;
+        let dimension = self.values.len() as f64;
+        let left_scale = self.scale as f64;
+        let right_scale = other.scale as f64;
+        let left_zero = self.zero_point as f64;
+        let right_zero = other.zero_point as f64;
+        let dequantized_dot = left_scale * right_scale * dot
+            + left_scale * right_zero * self.sum as f64
+            + right_scale * left_zero * other.sum as f64
+            + dimension * left_zero * right_zero;
+        let left_norm = left_scale * left_scale * self.norm_sq as f64
+            + 2.0 * left_scale * left_zero * self.sum as f64
+            + dimension * left_zero * left_zero;
+        let right_norm = right_scale * right_scale * other.norm_sq as f64
+            + 2.0 * right_scale * right_zero * other.sum as f64
+            + dimension * right_zero * right_zero;
         match metric {
             DistanceMetric::Cosine => {
-                if self.norm_sq == 0 || other.norm_sq == 0 {
+                if left_norm <= f64::EPSILON || right_norm <= f64::EPSILON {
                     return 1.0;
                 }
-                (1.0 - dot / ((self.norm_sq as f64).sqrt() * (other.norm_sq as f64).sqrt())) as f32
+                (1.0 - dequantized_dot / (left_norm.sqrt() * right_norm.sqrt())) as f32
             }
-            DistanceMetric::L2 => {
-                let left = self.scale as f64;
-                let right = other.scale as f64;
-                (left * left * self.norm_sq as f64 + right * right * other.norm_sq as f64
-                    - 2.0 * left * right * dot)
-                    .max(0.0) as f32
-            }
+            DistanceMetric::L2 => (left_norm + right_norm - 2.0 * dequantized_dot).max(0.0) as f32,
         }
     }
 }

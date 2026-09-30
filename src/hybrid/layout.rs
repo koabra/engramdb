@@ -160,7 +160,7 @@ fn estimated_size(records: &[HybridRecord], dimension: usize) -> usize {
     FUSED_HEADER_SIZE
         + records.len() * 8
         + records.len() * TEMPORAL_SIZE
-        + records.len() * 4
+        + records.len() * 8
         + records.len() * dimension
         + (records.len() + 1) * 4
         + records
@@ -188,7 +188,7 @@ fn layout_for(records: &[HybridRecord], dimension: usize) -> Result<Layout> {
     let temporal = align(cursor, 8);
     cursor = temporal + count * TEMPORAL_SIZE;
     let vectors = align(cursor, 64);
-    cursor = vectors + count * 4 + count * dimension;
+    cursor = vectors + count * 8 + count * dimension;
     let graph_offsets = align(cursor, 4);
     cursor = graph_offsets + (count + 1) * 4;
     let edges = align(cursor, 8);
@@ -232,8 +232,13 @@ fn encode_block(
         put_u64(bytes, temporal, record.assertion_time);
         put_i64(bytes, temporal + 8, record.valid_from);
         put_i64(bytes, temporal + 16, record.valid_to);
-        put_f32(bytes, layout.vectors + slot * 4, quantized[slot].scale);
-        let vector_start = layout.vectors + records.len() * 4 + slot * dimension;
+        put_f32(bytes, layout.vectors + slot * 8, quantized[slot].scale);
+        put_f32(
+            bytes,
+            layout.vectors + slot * 8 + 4,
+            quantized[slot].zero_point,
+        );
+        let vector_start = layout.vectors + records.len() * 8 + slot * dimension;
         for (target, value) in bytes[vector_start..vector_start + dimension]
             .iter_mut()
             .zip(&quantized[slot].values)
@@ -326,7 +331,7 @@ impl<'a> FusedBlockView<'a> {
             || header.ids < FUSED_HEADER_SIZE
             || header.ids + header.count * 8 > header.temporal
             || header.temporal + header.count * TEMPORAL_SIZE > header.vectors
-            || header.vectors + header.count * 4 + header.count * header.dimension
+            || header.vectors + header.count * 8 + header.count * header.dimension
                 > header.graph_offsets
             || header.graph_offsets + (header.count + 1) * 4 > header.edges
             || header.edges > header.used
@@ -362,8 +367,9 @@ impl<'a> FusedBlockView<'a> {
                     "fused-block contains an invalid temporal interval".to_owned(),
                 ));
             }
-            let scale = get_f32(bytes, header.vectors + slot * 4);
-            if !scale.is_finite() || scale <= 0.0 {
+            let scale = get_f32(bytes, header.vectors + slot * 8);
+            let zero_point = get_f32(bytes, header.vectors + slot * 8 + 4);
+            if !scale.is_finite() || scale <= 0.0 || !zero_point.is_finite() {
                 return Err(Error::Invariant(
                     "fused-block contains an invalid quantization scale".to_owned(),
                 ));
@@ -447,11 +453,15 @@ impl FusedRecordView<'_> {
     }
 
     pub fn scale(&self) -> f32 {
-        get_f32(self.bytes, self.header.vectors + self.slot * 4)
+        get_f32(self.bytes, self.header.vectors + self.slot * 8)
+    }
+
+    pub fn zero_point(&self) -> f32 {
+        get_f32(self.bytes, self.header.vectors + self.slot * 8 + 4)
     }
 
     pub fn quantized_vector(&self) -> &'_ [i8] {
-        let start = self.header.vectors + self.header.count * 4 + self.slot * self.header.dimension;
+        let start = self.header.vectors + self.header.count * 8 + self.slot * self.header.dimension;
         let bytes = &self.bytes[start..start + self.header.dimension];
         // SAFETY: i8 and u8 have identical size/alignment and the slice remains
         // bound to the validated block.
