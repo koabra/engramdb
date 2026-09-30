@@ -1,0 +1,35 @@
+[package]
+name = "engramdb"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.89"
+description = "Content-addressable copy-on-write storage foundation for EngramDB"
+license = "Apache-2.0"
+
+[dependencies]
+arc-swap = "1"
+blake3 = "1"
+crc32fast = "1"
+io-uring = "0.7"
+libc = "0.2"
+parking_lot = "0.12"
+serde = { version = "1", features = ["derive"] }
+thiserror = "2"
+uuid = { version = "1", features = ["v4", "serde"] }
+
+[dev-dependencies]
+loom = "0.7"
+proptest = "1"
+tempfile = "3"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+
+[[bin]]
+name = "phase1-bench"
+path = "src/bin/phase1_bench.rs"
+
+[[bin]]
+name = "phase2-bench"
+path = "src/bin/phase2_bench.rs"

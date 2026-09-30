@@ -1,0 +1,6 @@
+sift_base.fvecs: OK
+sift_query.fvecs: OK
+sift_groundtruth.ivecs: OK
+21f66e2975057b5728ba56de1c825bac4f4d89d596609ae985741c6242631816  sift_base.fvecs
+f7fc9be140accdfd64116c2fa2365ecdb69b8f084970c6b0532db5ff79ac8fdc  sift_query.fvecs
+2b71de0a8d5a83e6a84eec3e23fb8b611d8801dd9b3a6cd62f070ab65ea65f4f  sift_groundtruth.ivecs
