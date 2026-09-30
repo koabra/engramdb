@@ -57,7 +57,7 @@ impl<const SIZE: usize> AlignedBlock<SIZE> {
     }
 
     pub fn is_aligned(&self) -> bool {
-        self.pointer.as_ptr() as usize % SIZE == 0
+        (self.pointer.as_ptr() as usize).is_multiple_of(SIZE)
     }
 }
 
@@ -129,7 +129,7 @@ impl<const BLOCK_SIZE: usize> DirectIo<BLOCK_SIZE> {
             .mode(0o600)
             .open(path)?;
         let mut length = file.metadata()?.len();
-        if length % BLOCK_SIZE as u64 != 0 {
+        if !length.is_multiple_of(BLOCK_SIZE as u64) {
             // A power loss can leave the final direct-I/O page short. It cannot
             // be referenced by a durable metadata record because data fsync
             // precedes metadata append, so discard only this trailing fragment.
@@ -164,7 +164,7 @@ impl<const BLOCK_SIZE: usize> DirectIo<BLOCK_SIZE> {
     }
 
     pub(crate) fn truncate(&self, length: u64) -> Result<()> {
-        if length % BLOCK_SIZE as u64 != 0 {
+        if !length.is_multiple_of(BLOCK_SIZE as u64) {
             return Err(Error::Invariant(
                 "direct-I/O truncation must be page aligned".to_owned(),
             ));
@@ -191,7 +191,7 @@ impl<const BLOCK_SIZE: usize> DirectIo<BLOCK_SIZE> {
     }
 
     pub fn write_at(&self, offset: u64, page: &AlignedBlock<BLOCK_SIZE>) -> Result<()> {
-        if offset % BLOCK_SIZE as u64 != 0 {
+        if !offset.is_multiple_of(BLOCK_SIZE as u64) {
             return Err(Error::Invariant("unaligned direct write offset".to_owned()));
         }
         // The SQE owns no buffer reference. Clone into request-owned storage so
@@ -223,7 +223,7 @@ impl<const BLOCK_SIZE: usize> DirectIo<BLOCK_SIZE> {
     }
 
     pub fn read(&self, offset: u64) -> Result<AlignedBlock<BLOCK_SIZE>> {
-        if offset % BLOCK_SIZE as u64 != 0 || offset >= self.len() {
+        if !offset.is_multiple_of(BLOCK_SIZE as u64) || offset >= self.len() {
             return Err(Error::CorruptPage {
                 offset,
                 reason: "read offset is outside the page file".to_owned(),
