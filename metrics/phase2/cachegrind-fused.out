@@ -2,7 +2,7 @@ desc: I1 cache:         32768 B, 64 B, 8-way associative
 desc: D1 cache:         49152 B, 64 B, 12-way associative
 desc: LL cache:         2097152 B, 64 B, 16-way associative
 cmd: target/release/phase2-bench profile-fused --data-dir /tmp/engramdb-phase2-validation/profile-fused
-events: Ir I1mr ILmr Dr D1mr DLmr Dw D1mw DLmw 
+events: Ir I1mr ILmr Dr D1mr DLmr Dw D1mw DLmw
 fl=./csu/../csu/libc-start.c
 fn=__libc_start_main@@GLIBC_2.34
 128 2 1 1 2 0 0 0 0 0

@@ -31,6 +31,14 @@ def inclusive_values(path: Path, functions: list[str]) -> list[int]:
     return values
 
 
+def normalize_text(path: Path) -> None:
+    path.write_text(
+        "\n".join(line.rstrip() for line in path.read_text(encoding="utf-8").splitlines())
+        + "\n",
+        encoding="utf-8",
+    )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--fused", type=Path, required=True)
@@ -56,7 +64,7 @@ def main() -> None:
     ]
     args.csv.parent.mkdir(parents=True, exist_ok=True)
     with args.csv.open("w", newline="", encoding="utf-8") as output:
-        writer = csv.writer(output)
+        writer = csv.writer(output, lineterminator="\n")
         writer.writerow(["layout", "data_references", "l1_data_misses", "l2_data_misses"])
         writer.writerows(rows)
 
@@ -80,6 +88,14 @@ def main() -> None:
 <text x="400" y="385" text-anchor="middle" font-size="12">Cachegrind: 48 KiB L1D, 2 MiB L2, 64-byte lines</text>
 </svg>"""
     args.svg.write_text(svg, encoding="utf-8")
+    for path in (
+        args.fused,
+        args.split,
+        args.fused.with_suffix(".out"),
+        args.split.with_suffix(".out"),
+    ):
+        if path.exists():
+            normalize_text(path)
 
 
 if __name__ == "__main__":
