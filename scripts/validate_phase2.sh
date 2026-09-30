@@ -41,6 +41,7 @@ if [[ "${PHASE2_SKIP_SIFT:-0}" != "1" ]]; then
     --output "$metrics_dir/sift-recall.csv" \
     --base-limit "$base_limit" \
     --queries "$sift_queries"
+  git rev-parse HEAD > "$metrics_dir/sift-validation-commit.txt"
 fi
 
 cargo run --release --bin phase2-bench -- \
@@ -75,6 +76,7 @@ if command -v valgrind >/dev/null && command -v cg_annotate >/dev/null; then
     --split "$metrics_dir/cachegrind-split.txt" \
     --csv "$metrics_dir/cachegrind-summary.csv" \
     --svg "$metrics_dir/cachegrind-summary.svg"
+  git rev-parse HEAD > "$metrics_dir/cache-validation-commit.txt"
 else
   printf 'valgrind/cg_annotate unavailable; cachegrind not executed\n' \
     > "$metrics_dir/cachegrind-unavailable.txt"

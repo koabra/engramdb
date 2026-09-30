@@ -1,0 +1,2 @@
+PostgreSQL/pgvector was not configured; no numeric result was produced.
+Neo4j/Qdrant was not fully configured; no numeric result was produced.

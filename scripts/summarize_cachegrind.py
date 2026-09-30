@@ -8,17 +8,27 @@ import csv
 from pathlib import Path
 
 
-def kernel_values(path: Path, function: str) -> list[int]:
-    for line in path.read_text(encoding="utf-8").splitlines():
+def function_values(lines: list[str], function: str) -> list[int]:
+    for line in lines:
         if function not in line or line.lstrip().startswith(">"):
             continue
-        values = []
-        for token in line.split(function, 1)[0].split():
-            if token[0].isdigit():
-                values.append(int(token.replace(",", "")))
+        values = [
+            int(token.replace(",", ""))
+            for token in line.split(function, 1)[0].split()
+            if token[0].isdigit()
+        ]
         if len(values) >= 9:
             return values[:9]
-    raise SystemExit(f"query kernel {function} not found in {path}")
+    raise SystemExit(f"query function {function} not found")
+
+
+def inclusive_values(path: Path, functions: list[str]) -> list[int]:
+    lines = path.read_text(encoding="utf-8").splitlines()
+    values = [0] * 9
+    for function in functions:
+        for index, value in enumerate(function_values(lines, function)):
+            values[index] += value
+    return values
 
 
 def main() -> None:
@@ -28,8 +38,18 @@ def main() -> None:
     parser.add_argument("--csv", type=Path, required=True)
     parser.add_argument("--svg", type=Path, required=True)
     args = parser.parse_args()
-    fused = kernel_values(args.fused, "phase2_bench::profile_fused_queries")
-    split = kernel_values(args.split, "phase2_bench::profile_split_queries")
+    fused = inclusive_values(
+        args.fused,
+        [
+            "phase2_bench::profile_fused_queries",
+            "engramdb::hybrid::simd::dot_i8",
+            "engramdb::hybrid::layout::decode_header",
+        ],
+    )
+    split = inclusive_values(
+        args.split,
+        ["phase2_bench::profile_split_queries", "engramdb::hybrid::simd::dot_i8"],
+    )
     rows = [
         ("fused", fused[3] + fused[6], fused[4] + fused[7], fused[5] + fused[8]),
         ("split", split[3] + split[6], split[4] + split[7], split[5] + split[8]),

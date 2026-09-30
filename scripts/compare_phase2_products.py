@@ -22,6 +22,12 @@ def vector_for(node_id: int, dimension: int) -> list[float]:
     return vector
 
 
+def query_vector_for(node_id: int, dimension: int) -> list[float]:
+    vector = [0.0] * dimension
+    vector[node_id % min(dimension, 32)] = 1.0
+    return vector
+
+
 def graph_target(node_id: int, step: int, nodes: int) -> int:
     mixed = (
         node_id * 6_364_136_223_846_793_005
@@ -144,7 +150,7 @@ async def postgresql(args: argparse.Namespace) -> list[tuple[int, float, int]]:
         for query_id in range(args.queries):
             root = query_id * 7919 % args.nodes
             started = time.perf_counter_ns()
-            result = await statement.fetch(root, str(vector_for(root, args.dimension)))
+            result = await statement.fetch(root, str(query_vector_for(root, args.dimension)))
             rows.append((query_id, (time.perf_counter_ns() - started) / 1000, len(result)))
         return rows
     finally:
@@ -227,7 +233,7 @@ def neo4j_qdrant(args: argparse.Namespace) -> list[tuple[int, float, int]]:
                 started = time.perf_counter_ns()
                 semantic = qdrant.query_points(
                     collection,
-                    query=vector_for(root, args.dimension),
+                    query=query_vector_for(root, args.dimension),
                     query_filter=models.Filter(
                         must=[
                             models.FieldCondition(
