@@ -25,7 +25,9 @@ pub struct BlockRef {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SearchResult {
     pub id: Hash,
-    pub cosine_similarity: f32,
+    /// Cosine similarity for [`VectorMetric::Cosine`], or negative squared
+    /// distance for [`VectorMetric::SquaredL2`]. Higher is always better.
+    pub score: f32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -53,6 +55,13 @@ pub struct HybridIndexStats {
     pub logical_bytes: u64,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum VectorMetric {
+    #[default]
+    Cosine,
+    SquaredL2,
+}
+
 struct StoredBlock {
     reference_hash: Hash,
     offset: u64,
@@ -76,10 +85,15 @@ pub struct HybridIndex {
     hnsw: Hnsw,
     logical_bytes: u64,
     vector_dimension: Option<usize>,
+    metric: VectorMetric,
 }
 
 impl HybridIndex {
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
+        Self::open_with_metric(path, VectorMetric::Cosine)
+    }
+
+    pub fn open_with_metric(path: impl AsRef<Path>, metric: VectorMetric) -> Result<Self> {
         let io = Arc::new(DirectIo::open_with_layout(path, 256, FUSED_BLOCK_LAYOUT)?);
         let mut index = Self {
             io,
@@ -89,6 +103,7 @@ impl HybridIndex {
             hnsw: Hnsw::new(DEFAULT_HNSW_M, DEFAULT_EF_SEARCH),
             logical_bytes: 0,
             vector_dimension: None,
+            metric,
         };
         index.load_blocks()?;
         index.rebuild_hnsw()?;
@@ -180,13 +195,13 @@ impl HybridIndex {
         let query = QuantizedVector::from_f32(vector)?;
         let candidates = self.hnsw.search(count, ef_search.max(count), |index| {
             self.node(index)
-                .and_then(|node| node.cosine_similarity(&query))
+                .and_then(|node| self.score_query(node, &query))
         })?;
         Ok(candidates
             .into_iter()
             .map(|scored| SearchResult {
                 id: self.node(scored.index).expect("validated HNSW node").id(),
-                cosine_similarity: scored.score,
+                score: scored.score,
             })
             .collect())
     }
@@ -197,7 +212,7 @@ impl HybridIndex {
         for index in 0..self.locations.len() {
             scored.push(Scored {
                 index,
-                score: self.node(index)?.cosine_similarity(&query)?,
+                score: self.score_query(self.node(index)?, &query)?,
             });
         }
         scored.sort_by(|left, right| right.cmp(left));
@@ -206,7 +221,7 @@ impl HybridIndex {
             .into_iter()
             .map(|result| SearchResult {
                 id: self.node(result.index).expect("validated exact node").id(),
-                cosine_similarity: result.score,
+                score: result.score,
             })
             .collect())
     }
@@ -370,11 +385,25 @@ impl HybridIndex {
             let id = self.node(index)?.id();
             hnsw.insert(index, id, |left, right| {
                 let left_node = self.node(left)?;
-                left_node.cosine_similarity_to(self.node(right)?)
+                self.score_nodes(left_node, self.node(right)?)
             })?;
         }
         self.hnsw = hnsw;
         Ok(())
+    }
+
+    fn score_query(&self, node: FusedNodeView<'_>, query: &QuantizedVector) -> Result<f32> {
+        match self.metric {
+            VectorMetric::Cosine => node.cosine_similarity(query),
+            VectorMetric::SquaredL2 => node.squared_l2_score(query),
+        }
+    }
+
+    fn score_nodes(&self, left: FusedNodeView<'_>, right: FusedNodeView<'_>) -> Result<f32> {
+        match self.metric {
+            VectorMetric::Cosine => left.cosine_similarity_to(right),
+            VectorMetric::SquaredL2 => left.squared_l2_score_to(right),
+        }
     }
 }
 

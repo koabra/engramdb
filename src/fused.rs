@@ -455,6 +455,21 @@ impl<'a> FusedNodeView<'a> {
         Ok(dot_i8(self.vector, &query.codes) as f32 / (self.quantized_norm * query.norm))
     }
 
+    pub(crate) fn squared_l2_score(self, query: &QuantizedVector) -> Result<f32> {
+        if query.codes.len() != self.vector.len() {
+            return Err(Error::DimensionMismatch {
+                expected: self.vector.len(),
+                actual: query.codes.len(),
+            });
+        }
+        Ok(-squared_l2_i8(
+            self.vector,
+            self.quant_scale,
+            &query.codes,
+            query.scale,
+        ))
+    }
+
     pub(crate) fn cosine_similarity_to(self, other: FusedNodeView<'_>) -> Result<f32> {
         if self.vector.len() != other.vector.len() {
             return Err(Error::DimensionMismatch {
@@ -466,6 +481,21 @@ impl<'a> FusedNodeView<'a> {
             return Ok(0.0);
         }
         Ok(dot_i8(self.vector, other.vector) as f32 / (self.quantized_norm * other.quantized_norm))
+    }
+
+    pub(crate) fn squared_l2_score_to(self, other: FusedNodeView<'_>) -> Result<f32> {
+        if self.vector.len() != other.vector.len() {
+            return Err(Error::DimensionMismatch {
+                expected: self.vector.len(),
+                actual: other.vector.len(),
+            });
+        }
+        Ok(-squared_l2_i8(
+            self.vector,
+            self.quant_scale,
+            other.vector,
+            other.quant_scale,
+        ))
     }
 
     pub fn temporal(self) -> TemporalIter<'a> {
@@ -563,6 +593,63 @@ fn dot_i8_scalar(left: &[i8], right: &[i8]) -> i64 {
         .zip(right)
         .map(|(left, right)| *left as i64 * *right as i64)
         .sum()
+}
+
+fn squared_l2_i8(left: &[i8], left_scale: f32, right: &[i8], right_scale: f32) -> f32 {
+    debug_assert_eq!(left.len(), right.len());
+    #[cfg(target_arch = "x86_64")]
+    if std::arch::is_x86_feature_detected!("avx2") {
+        // SAFETY: runtime feature detection proves AVX2 support.
+        return unsafe { squared_l2_i8_avx2(left, left_scale, right, right_scale) };
+    }
+    squared_l2_i8_scalar(left, left_scale, right, right_scale)
+}
+
+fn squared_l2_i8_scalar(left: &[i8], left_scale: f32, right: &[i8], right_scale: f32) -> f32 {
+    left.iter()
+        .zip(right)
+        .map(|(left, right)| {
+            let difference = *left as f32 * left_scale - *right as f32 * right_scale;
+            difference * difference
+        })
+        .sum()
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2")]
+unsafe fn squared_l2_i8_avx2(left: &[i8], left_scale: f32, right: &[i8], right_scale: f32) -> f32 {
+    use std::arch::x86_64::*;
+
+    let left_scale_value = left_scale;
+    let right_scale_value = right_scale;
+    let left_scale = _mm256_set1_ps(left_scale);
+    let right_scale = _mm256_set1_ps(right_scale);
+    let mut accumulator = _mm256_setzero_ps();
+    let mut position = 0;
+    while position + 8 <= left.len() {
+        let left_bytes = _mm_loadl_epi64(left.as_ptr().add(position).cast());
+        let right_bytes = _mm_loadl_epi64(right.as_ptr().add(position).cast());
+        let left_values = _mm256_mul_ps(
+            _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(left_bytes)),
+            left_scale,
+        );
+        let right_values = _mm256_mul_ps(
+            _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(right_bytes)),
+            right_scale,
+        );
+        let difference = _mm256_sub_ps(left_values, right_values);
+        accumulator = _mm256_add_ps(accumulator, _mm256_mul_ps(difference, difference));
+        position += 8;
+    }
+    let mut lanes = [0_f32; 8];
+    _mm256_storeu_ps(lanes.as_mut_ptr(), accumulator);
+    lanes.iter().sum::<f32>()
+        + squared_l2_i8_scalar(
+            &left[position..],
+            left_scale_value,
+            &right[position..],
+            right_scale_value,
+        )
 }
 
 #[cfg(target_arch = "x86_64")]

@@ -6,7 +6,7 @@ use std::time::Instant;
 
 use engramdb::{
     dot_i8, DirectIo, FusedBlockBuilder, FusedBlockView, FusedNode, GraphEdge, Hash, HybridIndex,
-    QuantizedVector, TemporalPoint, TriModalQuery, FUSED_BLOCK_LAYOUT,
+    QuantizedVector, TemporalPoint, TriModalQuery, VectorMetric, FUSED_BLOCK_LAYOUT,
 };
 
 fn main() {
@@ -117,7 +117,7 @@ fn sift_recall(
     reset_file(data_path)?;
     let nodes = base.len();
     let dimensions = base[0].len();
-    let mut index = HybridIndex::open(data_path)?;
+    let mut index = HybridIndex::open_with_metric(data_path, VectorMetric::SquaredL2)?;
     index.insert(
         1,
         base.into_iter()
