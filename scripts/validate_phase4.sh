@@ -42,6 +42,8 @@ python3 -m py_compile \
 cargo build --release --bin engramdb_server --bin phase4_bench
 cargo run --release --bin phase4_bench -- \
   capability --output "$metrics_dir/capability.json"
+cargo run --release --features gds --bin phase4_bench -- \
+  capability --output "$metrics_dir/capability-gds-build.json"
 cargo run --release --bin phase4_bench -- \
   bandwidth --data-dir "$scratch_dir/bandwidth" \
   --output "$metrics_dir/bandwidth.csv" \
@@ -102,7 +104,7 @@ python3 scripts/plot_phase4.py ttft \
 python3 scripts/plot_phase4.py integrity \
   "$metrics_dir/integrity.csv" "$metrics_dir/integrity.svg"
 
-python3 - "$metrics_dir/capability.json" "$metrics_dir/hardware-validation.txt" <<'PY'
+python3 - "$metrics_dir/capability-gds-build.json" "$metrics_dir/hardware-validation.txt" <<'PY'
 import json, pathlib, sys
 capability = json.loads(pathlib.Path(sys.argv[1]).read_text())
 verified = capability["transfer_path"] == "GdsDirectVerified"
