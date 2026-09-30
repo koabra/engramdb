@@ -66,7 +66,7 @@ def latency_plot(input_path: Path, output_path: Path) -> None:
 def storage_plot(input_path: Path, output_path: Path) -> None:
     with input_path.open(newline="", encoding="utf-8") as source:
         row = next(csv.DictReader(source))
-    sample_gib = int(row["physical_bytes"]) / 2**30
+    sample_gib = int(row["block_file_bytes"]) / 2**30
     extrapolated_gib = float(row["extrapolated_10m_bytes"]) / 2**30
     body = f"""
 <text x="110" y="110" font-size="14">Measured sample ({int(row['sample_nodes']):,} nodes)</text>

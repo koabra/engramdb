@@ -221,17 +221,17 @@ fn storage(arguments: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         blocks += 1;
     }
     io.sync()?;
-    let physical_bytes = io.len();
-    let bytes_per_node = physical_bytes as f64 / sample_nodes as f64;
+    let block_file_bytes = io.len();
+    let bytes_per_node = block_file_bytes as f64 / sample_nodes as f64;
     let extrapolated = bytes_per_node * 10_000_000.0;
     let mut writer = output_writer(&output)?;
     writeln!(
         writer,
-        "product,sample_nodes,dimension,edges,blocks,physical_bytes,bytes_per_node,extrapolated_10m_bytes"
+        "product,sample_nodes,dimension,edges,blocks,block_file_bytes,bytes_per_node,extrapolated_10m_bytes"
     )?;
     writeln!(
         writer,
-        "engramdb,{sample_nodes},{dimension},{edge_count},{blocks},{physical_bytes},{bytes_per_node:.3},{extrapolated:.0}"
+        "engramdb,{sample_nodes},{dimension},{edge_count},{blocks},{block_file_bytes},{bytes_per_node:.3},{extrapolated:.0}"
     )?;
     Ok(())
 }
