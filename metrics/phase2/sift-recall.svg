@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="800" height="420" viewBox="0 0 800 420">
+<rect width="100%" height="100%" fill="white"/>
+<style>text{font-family:system-ui,sans-serif;fill:#111827}.grid{stroke:#e5e7eb}</style>
+<text x="400.0" y="34" text-anchor="middle" font-size="20" font-weight="600">Quantized HNSW Recall@10</text>
+
+<rect x="120" y="120" width="560" height="54" rx="5" fill="#e5e7eb"/>
+<rect x="120" y="120" width="543.00" height="54" rx="5" fill="#2563eb"/>
+<line x1="652.0" y1="100" x2="652.0" y2="194" stroke="#dc2626" stroke-width="3"/>
+<text x="120" y="215" font-size="13">0.0</text><text x="680" y="215" text-anchor="end" font-size="13">1.0</text>
+<text x="400" y="155" text-anchor="middle" font-size="22" font-weight="600">0.9696</text>
+<text x="647.0" y="92" text-anchor="end" font-size="12" fill="#dc2626">required &gt; 0.95</text>
+<text x="400" y="285" text-anchor="middle" font-size="14">1000000 base vectors · 10000 queries · Avx512</text>
+<text x="400" y="315" text-anchor="middle" font-size="13">truth: published</text>
+</svg>
