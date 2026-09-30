@@ -12,7 +12,9 @@ use parking_lot::{Mutex, RwLock};
 use uuid::Uuid;
 
 use crate::checkpoint::{CheckpointLog, CheckpointRoot};
-use crate::hybrid::{HybridIndex, SearchResult, TraversalMatch, TriModalQuery, VectorMetric};
+use crate::hybrid::{
+    HybridIndex, NodeProjection, SearchResult, TraversalMatch, TriModalQuery, VectorMetric,
+};
 use crate::io::{DirectIo, IoStats, FUSED_BLOCK_LAYOUT, FUSED_BLOCK_SIZE};
 use crate::tree::{Hash, NodeRef, NodeStore, PersistentTree};
 use crate::{Error, FusedNode, Result};
@@ -480,6 +482,26 @@ impl Engine {
     ) -> Result<Vec<TraversalMatch>> {
         match self.hybrid_index(branch)? {
             Some(index) => index.tri_modal_query(start, query),
+            None => Ok(Vec::new()),
+        }
+    }
+
+    pub fn hybrid_query_vector_first(
+        &self,
+        branch: Uuid,
+        start: Hash,
+        query: TriModalQuery<'_>,
+        limit: usize,
+    ) -> Result<Vec<TraversalMatch>> {
+        match self.hybrid_index(branch)? {
+            Some(index) => index.tri_modal_query_vector_first(start, query, limit),
+            None => Ok(Vec::new()),
+        }
+    }
+
+    pub fn hybrid_projections(&self, branch: Uuid) -> Result<Vec<NodeProjection>> {
+        match self.hybrid_index(branch)? {
+            Some(index) => index.projections(),
             None => Ok(Vec::new()),
         }
     }
