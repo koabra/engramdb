@@ -1,14 +1,12 @@
-use std::collections::HashSet;
 use std::env;
 use std::fs::{self, File};
-use std::hint::black_box;
 use std::io::{self, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use engramdb::{
-    dot_i8, selected_simd_flavor, AlignedBlock, DirectIo, DistanceMetric, FusedBlockBuilder,
-    FusedBlockView, GraphEdge, HnswConfig, HybridIndex, HybridRecord, FUSED_BLOCK_SIZE,
+    dot_i8, DirectIo, FusedBlockBuilder, FusedBlockView, FusedNode, GraphEdge, Hash, HybridIndex,
+    QuantizedVector, TemporalPoint, TriModalQuery, VectorMetric, FUSED_BLOCK_LAYOUT,
 };
 
 fn main() {
@@ -21,455 +19,383 @@ fn main() {
 fn run() -> Result<(), Box<dyn std::error::Error>> {
     let arguments = env::args().skip(1).collect::<Vec<_>>();
     match arguments.first().map(String::as_str).unwrap_or("help") {
-        "sift" => sift(&arguments[1..]),
+        "recall" => recall(&arguments[1..]),
         "query" => query(&arguments[1..]),
-        "storage" => storage(&arguments[1..]),
-        "profile-fused" => profile_fused(&arguments[1..]),
-        "profile-split" => profile_split(&arguments[1..]),
+        "amplification" => amplification(&arguments[1..]),
+        "cache-layout" => cache_layout(&arguments[1..]),
         _ => {
             eprintln!(
-                "usage:\n  phase2-bench sift --sift-dir PATH --data-dir PATH --output CSV \
-                 [--base-limit 1000000] [--queries 10000]\n  \
-                 phase2-bench query --data-dir PATH --output CSV \
-                 [--nodes 10000] [--queries 10000] [--dimension 128]\n  \
-                 phase2-bench storage --data-dir PATH --output CSV \
-                 [--sample-nodes 100000] [--dimension 768] [--edges 10]\n  \
-                 phase2-bench profile-fused --data-dir PATH\n  \
-                 phase2-bench profile-split"
+                "usage:\n  phase2-bench recall --data-file PATH --output CSV \
+                 [--nodes 10000] [--queries 200] [--dimensions 128]\n  \
+                 phase2-bench query --data-file PATH --output CSV \
+                 [--nodes 2000] [--queries 10000] [--dimensions 128]\n  \
+                 phase2-bench amplification --data-file PATH --output CSV \
+                 [--nodes 10000000] [--dimensions 768] [--edges 10]\n  \
+                 phase2-bench cache-layout --output CSV [--iterations 10000]"
             );
             Ok(())
         }
     }
 }
 
-fn sift(arguments: &[String]) -> Result<(), Box<dyn std::error::Error>> {
-    let sift_dir = required_path(arguments, "--sift-dir")?;
-    let data_dir = required_path(arguments, "--data-dir")?;
+fn recall(arguments: &[String]) -> Result<(), Box<dyn std::error::Error>> {
+    let path = required_path(arguments, "--data-file")?;
     let output = required_path(arguments, "--output")?;
-    let base_limit = usize_option(arguments, "--base-limit", 1_000_000)?;
-    let query_limit = usize_option(arguments, "--queries", 10_000)?;
-    reset_directory(&data_dir)?;
-
-    let base = read_fvecs(&sift_dir.join("sift_base.fvecs"), base_limit)?;
-    let queries = read_fvecs(&sift_dir.join("sift_query.fvecs"), query_limit)?;
-    if base.is_empty() || queries.is_empty() || base[0].len() != queries[0].len() {
-        return Err("SIFT vectors are empty or dimensions differ".into());
+    if let Some(base_path) = option(arguments, "--base") {
+        return sift_recall(arguments, &path, &output, Path::new(&base_path));
     }
-    let dimension = base[0].len();
-    let records = base
-        .iter()
-        .enumerate()
-        .map(|(id, vector)| HybridRecord {
-            id: id as u64,
-            assertion_time: 1,
-            valid_from: i64::MIN,
-            valid_to: i64::MAX,
-            vector: vector.clone(),
-            edges: Vec::new(),
-        })
-        .collect::<Vec<_>>();
-    let mut index = HybridIndex::open(
-        &data_dir,
-        dimension,
-        DistanceMetric::L2,
-        HnswConfig {
-            max_connections: 16,
-            ef_construction: 128,
-            ef_search: 1024,
-        },
-    )?;
-    let build_started = Instant::now();
-    index.insert(1, records)?;
-    let build_s = build_started.elapsed().as_secs_f64();
-
-    let groundtruth_path = sift_dir.join("sift_groundtruth.ivecs");
-    let published_truth = if base.len() == 1_000_000 && groundtruth_path.exists() {
-        Some(read_ivecs(&groundtruth_path, queries.len())?)
-    } else {
-        None
-    };
-    let mut recalled = 0_usize;
-    let mut expected_total = 0_usize;
-    let query_started = Instant::now();
-    for (query_index, query) in queries.iter().enumerate() {
-        let expected = if let Some(truth) = &published_truth {
-            truth[query_index]
-                .iter()
-                .take(10)
-                .map(|value| *value as u64)
-                .collect::<HashSet<_>>()
-        } else {
-            exact_l2(&base, query, 10)
-        };
-        let actual = index
-            .nearest(query, 10, 0, u64::MAX)?
-            .hits
-            .into_iter()
-            .map(|hit| hit.id)
-            .collect::<HashSet<_>>();
-        recalled += expected.intersection(&actual).count();
-        expected_total += expected.len();
-    }
-    let query_s = query_started.elapsed().as_secs_f64();
-    let recall = recalled as f64 / expected_total as f64;
-    let mut writer = output_writer(&output)?;
-    writeln!(
-        writer,
-        "dataset,base_vectors,queries,dimension,build_s,query_s,recall_at_10,simd,disk_bytes,truth"
-    )?;
-    writeln!(
-        writer,
-        "SIFT1M,{},{},{dimension},{build_s:.6},{query_s:.6},{recall:.6},{:?},{},{}",
-        base.len(),
-        queries.len(),
-        selected_simd_flavor(),
-        index.disk_bytes(),
-        if published_truth.is_some() {
-            "published"
-        } else {
-            "exact_subset"
-        }
-    )?;
-    if recall <= 0.95 {
-        return Err(format!("Recall@10 {recall:.4} did not exceed 0.95").into());
-    }
-    Ok(())
-}
-
-fn query(arguments: &[String]) -> Result<(), Box<dyn std::error::Error>> {
-    let data_dir = required_path(arguments, "--data-dir")?;
-    let output = required_path(arguments, "--output")?;
     let nodes = usize_option(arguments, "--nodes", 10_000)?;
-    let query_count = usize_option(arguments, "--queries", 10_000)?;
-    let dimension = usize_option(arguments, "--dimension", 128)?;
-    reset_directory(&data_dir)?;
-    let mut index = HybridIndex::open(
-        &data_dir,
-        dimension,
-        DistanceMetric::Cosine,
-        HnswConfig::default(),
+    let queries = usize_option(arguments, "--queries", 200)?;
+    let dimensions = usize_option(arguments, "--dimensions", 128)?;
+    reset_file(&path)?;
+    let mut index = HybridIndex::open(&path)?;
+    index.insert(
+        1,
+        (0..nodes)
+            .map(|item| generated_node(item, dimensions, 0))
+            .collect::<Result<Vec<_>, _>>()?,
     )?;
-    let mut records = synthetic_records(nodes, dimension, 10);
-    for id in (0..nodes).step_by(10) {
-        let mut revision = records[id].clone();
-        revision.assertion_time = 20;
-        revision.vector.fill(0.0);
-        revision.vector[(id + 1) % dimension.min(32)] = 1.0;
-        records.push(revision);
-    }
-    index.insert(1, records)?;
+
     let mut writer = output_writer(&output)?;
     writeln!(
         writer,
-        "product,query,latency_us,hits,visited_records,physical_block_reads,nodes,dimension,hops"
+        "dataset,oracle,query,k,intersection,recall,approximate_us,exact_us,nodes,dimensions,ef_search"
     )?;
-    for query_id in 0..query_count {
-        let root = (query_id.wrapping_mul(7919) % nodes) as u64;
-        let mut vector = vec![0.0; dimension];
-        vector[root as usize % dimension.min(32)] = 1.0;
+    for query_id in 0..queries {
+        let vector = generated_vector(query_id * 37 % nodes, dimensions);
         let started = Instant::now();
-        let result = index.traverse(root, &vector, 3, 0.8, 500, 10, |_| true)?;
-        let latency_us = started.elapsed().as_secs_f64() * 1_000_000.0;
+        let approximate = index.nearest(&vector, 10)?;
+        let approximate_us = started.elapsed().as_secs_f64() * 1_000_000.0;
+        let started = Instant::now();
+        let exact = index.exact_nearest(&vector, 10)?;
+        let exact_us = started.elapsed().as_secs_f64() * 1_000_000.0;
+        let intersection = exact
+            .iter()
+            .filter(|expected| approximate.iter().any(|actual| actual.id == expected.id))
+            .count();
         writeln!(
             writer,
-            "engramdb,{query_id},{latency_us:.3},{},{},{},{nodes},{dimension},3",
-            result.hits.len(),
-            result.stats.visited_records,
-            result.stats.physical_block_reads
+            "synthetic-clustered,exact-quantized-scan,{query_id},10,{intersection},{:.6},{approximate_us:.3},{exact_us:.3},{nodes},{dimensions},256",
+            intersection as f64 / 10.0
         )?;
     }
     Ok(())
 }
 
-fn storage(arguments: &[String]) -> Result<(), Box<dyn std::error::Error>> {
-    let data_dir = required_path(arguments, "--data-dir")?;
+fn sift_recall(
+    arguments: &[String],
+    data_path: &Path,
+    output: &Path,
+    base_path: &Path,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let query_path = required_path(arguments, "--queries-file")?;
+    let groundtruth_path = required_path(arguments, "--groundtruth")?;
+    let limit_nodes = option(arguments, "--limit-nodes")
+        .map(|value| value.parse())
+        .transpose()?;
+    let limit_queries = usize_option(arguments, "--limit-queries", 200)?;
+    let ef_search = usize_option(arguments, "--ef-search", 4096)?;
+    let base = read_fvecs(base_path, limit_nodes)?;
+    let queries = read_fvecs(&query_path, Some(limit_queries))?;
+    let groundtruth = read_ivecs(&groundtruth_path, Some(queries.len()))?;
+    if base.is_empty() || queries.is_empty() || base[0].len() != queries[0].len() {
+        return Err("SIFT base/query files are empty or dimensionally inconsistent".into());
+    }
+    if groundtruth.len() != queries.len() || groundtruth.iter().any(|row| row.len() < 10) {
+        return Err("SIFT ground truth does not contain ten neighbors per query".into());
+    }
+    if groundtruth
+        .iter()
+        .flat_map(|row| row.iter().take(10))
+        .any(|index| *index >= base.len())
+    {
+        return Err(
+            "official SIFT ground truth references vectors excluded by --limit-nodes".into(),
+        );
+    }
+
+    reset_file(data_path)?;
+    let nodes = base.len();
+    let dimensions = base[0].len();
+    let mut index = HybridIndex::open_with_metric(data_path, VectorMetric::SquaredL2)?;
+    index.insert(
+        1,
+        base.into_iter()
+            .enumerate()
+            .map(|(item, vector)| {
+                FusedNode::new(
+                    format!("sift-{item}"),
+                    vec![TemporalPoint {
+                        assertion_time: 1,
+                        valid_time: 1,
+                    }],
+                    vector,
+                    Vec::new(),
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()?,
+    )?;
+    let ordinal_by_id: std::collections::HashMap<Hash, usize> = (0..nodes)
+        .map(|item| {
+            (
+                Hash(*blake3::hash(format!("sift-{item}").as_bytes()).as_bytes()),
+                item,
+            )
+        })
+        .collect();
+
+    let mut writer = output_writer(output)?;
+    writeln!(
+        writer,
+        "dataset,oracle,query,k,intersection,recall,approximate_us,exact_us,nodes,dimensions,ef_search"
+    )?;
+    for (query_id, vector) in queries.iter().enumerate() {
+        let started = Instant::now();
+        let approximate = index.nearest_with_ef(vector, 10, ef_search)?;
+        let approximate_us = started.elapsed().as_secs_f64() * 1_000_000.0;
+        let actual: std::collections::HashSet<usize> = approximate
+            .iter()
+            .map(|result| ordinal_by_id[&result.id])
+            .collect();
+        let intersection = groundtruth[query_id]
+            .iter()
+            .take(10)
+            .filter(|expected| actual.contains(expected))
+            .count();
+        writeln!(
+            writer,
+            "SIFT1M,official-fp32-groundtruth,{query_id},10,{intersection},{:.6},{approximate_us:.3},0.000,{nodes},{dimensions},{ef_search}",
+            intersection as f64 / 10.0
+        )?;
+    }
+    Ok(())
+}
+
+fn query(arguments: &[String]) -> Result<(), Box<dyn std::error::Error>> {
+    let path = required_path(arguments, "--data-file")?;
     let output = required_path(arguments, "--output")?;
-    let sample_nodes = usize_option(arguments, "--sample-nodes", 100_000)?;
-    let dimension = usize_option(arguments, "--dimension", 768)?;
+    let nodes = usize_option(arguments, "--nodes", 2_000)?;
+    let queries = usize_option(arguments, "--queries", 10_000)?;
+    let dimensions = usize_option(arguments, "--dimensions", 128)?;
+    reset_file(&path)?;
+
+    let ids: Vec<Hash> = (0..nodes)
+        .map(|item| Hash(*blake3::hash(format!("node-{item}").as_bytes()).as_bytes()))
+        .collect();
+    let mut records = Vec::with_capacity(nodes);
+    for item in 0..nodes {
+        let edges = (1..=3)
+            .map(|step| GraphEdge {
+                target: ids[(item + step) % nodes],
+                weight: 1.0 / step as f32,
+                edge_type: 1,
+            })
+            .collect();
+        records.push(FusedNode::new(
+            format!("node-{item}"),
+            vec![TemporalPoint {
+                assertion_time: (item % 100) as u64,
+                valid_time: (item % 500) as i64,
+            }],
+            generated_vector(item, dimensions),
+            edges,
+        )?);
+    }
+    let mut index = HybridIndex::open(&path)?;
+    index.insert(1, records)?;
+
+    let mut writer = output_writer(&output)?;
+    writeln!(
+        writer,
+        "product,query,latency_us,results,nodes,dimensions,hops,minimum_cosine"
+    )?;
+    for query_id in 0..queries {
+        let start = query_id * 7919 % nodes;
+        let vector = generated_vector(start, dimensions);
+        let started = Instant::now();
+        let results = index.tri_modal_query(
+            ids[start],
+            TriModalQuery {
+                vector: &vector,
+                minimum_cosine: 0.8,
+                assertion_before: 75,
+                valid_at: 400,
+                max_hops: 3,
+                edge_type: Some(1),
+            },
+        )?;
+        let latency_us = started.elapsed().as_secs_f64() * 1_000_000.0;
+        writeln!(
+            writer,
+            "engramdb,{query_id},{latency_us:.3},{},{nodes},{dimensions},3,0.8",
+            results.len()
+        )?;
+    }
+    Ok(())
+}
+
+fn amplification(arguments: &[String]) -> Result<(), Box<dyn std::error::Error>> {
+    let path = required_path(arguments, "--data-file")?;
+    let output = required_path(arguments, "--output")?;
+    let nodes = usize_option(arguments, "--nodes", 10_000_000)?;
+    let dimensions = usize_option(arguments, "--dimensions", 768)?;
     let edge_count = usize_option(arguments, "--edges", 10)?;
-    reset_directory(&data_dir)?;
-    let io = DirectIo::<FUSED_BLOCK_SIZE>::open(data_dir.join("layout.blocks"), 128)?;
-    let vector = (0..dimension)
-        .map(|index| ((index * 17 % 251) as f32 - 125.0) / 125.0)
-        .collect::<Vec<_>>();
-    let mut next_id = 0_usize;
+    reset_file(&path)?;
+    let io = DirectIo::open_with_layout(&path, 256, FUSED_BLOCK_LAYOUT)?;
+    let vector: Vec<f32> = (0..dimensions)
+        .map(|dimension| ((dimension * 31 % 251) as f32 - 125.0) / 125.0)
+        .collect();
+    let edges: Vec<GraphEdge> = (0..edge_count)
+        .map(|edge| GraphEdge {
+            target: Hash(*blake3::hash(format!("target-{edge}").as_bytes()).as_bytes()),
+            weight: 1.0,
+            edge_type: 1,
+        })
+        .collect();
+    let mut builder = FusedBlockBuilder::new(1);
     let mut blocks = 0_u64;
-    while next_id < sample_nodes {
-        let mut builder = FusedBlockBuilder::new(1, dimension)?;
-        while next_id < sample_nodes {
-            let item = HybridRecord {
-                id: next_id as u64,
+    let started = Instant::now();
+    for item in 0..nodes {
+        let node = FusedNode::new(
+            format!("amp-{item}"),
+            vec![TemporalPoint {
                 assertion_time: 1,
-                valid_from: 0,
-                valid_to: 1_000,
-                vector: vector.clone(),
-                edges: (1..=edge_count)
-                    .map(|step| GraphEdge {
-                        target: ((next_id + step) % sample_nodes) as u64,
-                        weight: 1.0,
-                        edge_type: 1,
-                    })
-                    .collect(),
-            };
-            if builder.try_push(item)? {
-                next_id += 1;
-            } else {
-                break;
-            }
+                valid_time: 1,
+            }],
+            vector.clone(),
+            edges.clone(),
+        )?;
+        if !builder.is_empty() && !builder.can_fit(&node)? {
+            io.append(&builder.finish()?)?;
+            blocks += 1;
+            builder = FusedBlockBuilder::new(1);
         }
+        builder.push(node)?;
+    }
+    if !builder.is_empty() {
         io.append(&builder.finish()?)?;
         blocks += 1;
     }
     io.sync()?;
-    let block_file_bytes = io.len();
-    let bytes_per_node = block_file_bytes as f64 / sample_nodes as f64;
-    let extrapolated = bytes_per_node * 10_000_000.0;
+    let elapsed = started.elapsed().as_secs_f64();
+    let physical_bytes = fs::metadata(&path)?.len();
+    let source_bytes_per_node = 32 + dimensions * 4 + 16 + edge_count * 40;
+    let encoded_bytes_per_node = 64 + dimensions + 16 + edge_count * 40;
+    let source_bytes = nodes as u64 * source_bytes_per_node as u64;
+    let encoded_bytes = nodes as u64 * encoded_bytes_per_node as u64;
     let mut writer = output_writer(&output)?;
     writeln!(
         writer,
-        "product,sample_nodes,dimension,edges,blocks,block_file_bytes,bytes_per_node,extrapolated_10m_bytes"
+        "product,nodes,dimensions,edges,blocks,source_bytes,encoded_bytes,physical_bytes,physical_vs_source,packing_amplification,elapsed_s,measured"
     )?;
     writeln!(
         writer,
-        "engramdb,{sample_nodes},{dimension},{edge_count},{blocks},{block_file_bytes},{bytes_per_node:.3},{extrapolated:.0}"
+        "engramdb,{nodes},{dimensions},{edge_count},{blocks},{source_bytes},{encoded_bytes},{physical_bytes},{:.6},{:.6},{elapsed:.6},true",
+        physical_bytes as f64 / source_bytes as f64,
+        physical_bytes as f64 / encoded_bytes as f64
     )?;
     Ok(())
 }
 
-fn profile_fused(arguments: &[String]) -> Result<(), Box<dyn std::error::Error>> {
-    let _data_dir = required_path(arguments, "--data-dir")?;
-    let dimension = 128;
-    let records = synthetic_records(10_000, dimension, 10);
-    let mut blocks = Vec::new();
-    let mut locations = std::collections::HashMap::new();
-    let mut cursor = 0;
-    while cursor < records.len() {
-        let mut builder = FusedBlockBuilder::new(1, dimension)?;
-        while cursor < records.len() {
-            if builder.try_push(records[cursor].clone())? {
-                cursor += 1;
-            } else {
-                break;
+fn cache_layout(arguments: &[String]) -> Result<(), Box<dyn std::error::Error>> {
+    let output = required_path(arguments, "--output")?;
+    let iterations = usize_option(arguments, "--iterations", 10_000)?;
+    let selected_layout = option(arguments, "--layout").unwrap_or_else(|| "both".to_owned());
+    if !matches!(selected_layout.as_str(), "both" | "fused" | "pointer") {
+        return Err("--layout must be one of: both, fused, pointer".into());
+    }
+    let dimensions = 256;
+    let nodes = 128;
+    let records = (0..nodes)
+        .map(|item| generated_node(item, dimensions, 2))
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut builder = FusedBlockBuilder::new(1);
+    for node in records {
+        builder.push(node)?;
+    }
+    let block = builder.finish()?;
+    let view = FusedBlockView::parse(block.as_slice(), 0)?;
+    let query = QuantizedVector::from_f32(&generated_vector(7, dimensions))?;
+    let pointer_vectors: Vec<Box<[i8]>> = (0..view.len())
+        .map(|slot| {
+            view.node(slot, 0)
+                .unwrap()
+                .vector()
+                .to_vec()
+                .into_boxed_slice()
+        })
+        .collect();
+
+    let mut rows = Vec::new();
+    let mut checksum = 0_i64;
+    if selected_layout != "pointer" {
+        let started = Instant::now();
+        let mut fused_sum = 0_i64;
+        for _ in 0..iterations {
+            for slot in 0..view.len() {
+                fused_sum += dot_i8(view.node(slot, 0)?.vector(), query.codes());
             }
         }
-        let block = builder.finish()?;
-        let block_index = blocks.len();
-        let view = FusedBlockView::parse(block.as_slice())?;
-        for slot in 0..view.len() {
-            locations.insert(view.record(slot)?.id(), (block_index, slot));
-        }
-        blocks.push(block);
+        rows.push(("fused", started.elapsed().as_nanos()));
+        checksum ^= fused_sum;
     }
-    profile_fused_queries(&blocks, &locations, dimension)?;
+    if selected_layout != "fused" {
+        let started = Instant::now();
+        let mut pointer_sum = 0_i64;
+        for _ in 0..iterations {
+            for vector in &pointer_vectors {
+                pointer_sum += dot_i8(vector, query.codes());
+            }
+        }
+        rows.push(("pointer", started.elapsed().as_nanos()));
+        checksum ^= pointer_sum;
+    }
+    std::hint::black_box(checksum);
+
+    let mut writer = output_writer(&output)?;
+    writeln!(writer, "layout,iterations,nodes,dimensions,elapsed_ns")?;
+    for (layout, elapsed_ns) in rows {
+        writeln!(
+            writer,
+            "{layout},{iterations},{nodes},{dimensions},{elapsed_ns}"
+        )?;
+    }
     Ok(())
 }
 
-#[inline(never)]
-fn profile_fused_queries(
-    blocks: &[AlignedBlock<FUSED_BLOCK_SIZE>],
-    locations: &std::collections::HashMap<u64, (usize, usize)>,
-    dimension: usize,
-) -> Result<(), Box<dyn std::error::Error>> {
-    for query_id in 0..100 {
-        let root = (query_id * 37 % 10_000) as u64;
-        let mut query = vec![0_i8; dimension];
-        query[root as usize % 32] = 127;
-        let mut pending = std::collections::VecDeque::from([(root, 0)]);
-        let mut visited = HashSet::new();
-        let mut score = 0_i64;
-        while let Some((id, depth)) = pending.pop_front() {
-            if depth > 3 || !visited.insert(id) {
-                continue;
-            }
-            let (block, slot) = locations[&id];
-            let view = FusedBlockView::parse_cached(blocks[block].as_slice())?;
-            let record = view.record(slot)?;
-            let vector = record.quantized_vector();
-            score += dot_i8(&query, vector);
-            if depth < 3 {
-                for edge in record.edges() {
-                    pending.push_back((edge.target, depth + 1));
-                }
-            }
-        }
-        black_box(score);
-    }
-    Ok(())
+fn generated_node(
+    item: usize,
+    dimensions: usize,
+    edges: usize,
+) -> Result<FusedNode, engramdb::Error> {
+    FusedNode::new(
+        format!("node-{item}"),
+        vec![TemporalPoint {
+            assertion_time: (item % 100) as u64,
+            valid_time: (item % 500) as i64,
+        }],
+        generated_vector(item, dimensions),
+        (0..edges)
+            .map(|edge| GraphEdge {
+                target: Hash(
+                    *blake3::hash(format!("node-{}", (item + edge + 1) % 10_000).as_bytes())
+                        .as_bytes(),
+                ),
+                weight: 1.0,
+                edge_type: 1,
+            })
+            .collect(),
+    )
 }
 
-fn profile_split(_arguments: &[String]) -> Result<(), Box<dyn std::error::Error>> {
-    let dimension = 128;
-    let records = synthetic_records(10_000, dimension, 10);
-    let by_id = records
-        .into_iter()
-        .map(|record| {
-            (
-                record.id,
-                Box::new(SplitProfileRecord {
-                    vector: quantize_profile(&record.vector),
-                    edges: record.edges,
-                }),
-            )
+fn generated_vector(item: usize, dimensions: usize) -> Vec<f32> {
+    let cluster = item % 32;
+    (0..dimensions)
+        .map(|dimension| {
+            let basis = if dimension % 32 == cluster { 1.0 } else { 0.0 };
+            let noise = (((item * 1_103_515_245 + dimension * 12_345) >> 8) & 0xff) as f32;
+            basis + (noise / 255.0 - 0.5) * 0.08
         })
-        .collect::<std::collections::HashMap<_, _>>();
-    profile_split_queries(&by_id, dimension);
-    Ok(())
-}
-
-#[inline(never)]
-fn profile_split_queries(
-    by_id: &std::collections::HashMap<u64, Box<SplitProfileRecord>>,
-    dimension: usize,
-) {
-    for query_id in 0..100 {
-        let root = (query_id * 37 % 10_000) as u64;
-        let mut query = vec![0_i8; dimension];
-        query[root as usize % 32] = 127;
-        let mut pending = std::collections::VecDeque::from([(root, 0)]);
-        let mut visited = HashSet::new();
-        let mut score = 0_i64;
-        while let Some((id, depth)) = pending.pop_front() {
-            if depth > 3 || !visited.insert(id) {
-                continue;
-            }
-            let record = &by_id[&id];
-            score += dot_i8(&query, &record.vector);
-            if depth < 3 {
-                for edge in &record.edges {
-                    pending.push_back((edge.target, depth + 1));
-                }
-            }
-        }
-        black_box(score);
-    }
-}
-
-struct SplitProfileRecord {
-    vector: Vec<i8>,
-    edges: Vec<GraphEdge>,
-}
-
-fn quantize_profile(vector: &[f32]) -> Vec<i8> {
-    let (minimum, maximum) = vector.iter().fold(
-        (f32::INFINITY, f32::NEG_INFINITY),
-        |(minimum, maximum), value| (minimum.min(*value), maximum.max(*value)),
-    );
-    let scale = if maximum == minimum {
-        1.0
-    } else {
-        (maximum - minimum) / 254.0
-    };
-    let zero = (maximum + minimum) * 0.5;
-    vector
-        .iter()
-        .map(|value| ((value - zero) / scale).round().clamp(-127.0, 127.0) as i8)
-        .collect()
-}
-
-fn synthetic_records(nodes: usize, dimension: usize, edges: usize) -> Vec<HybridRecord> {
-    (0..nodes)
-        .map(|id| {
-            let mut vector = vec![0.0; dimension];
-            vector[id % dimension.min(32)] = 1.0;
-            vector[(id * 13 + 7) % dimension] += 0.1;
-            HybridRecord {
-                id: id as u64,
-                assertion_time: (id % 10 + 1) as u64,
-                valid_from: 0,
-                valid_to: 1_000,
-                vector,
-                edges: (1..=edges)
-                    .map(|step| GraphEdge {
-                        target: graph_target(id, step, nodes) as u64,
-                        weight: 1.0,
-                        edge_type: 1,
-                    })
-                    .collect(),
-            }
-        })
-        .collect()
-}
-
-fn graph_target(id: usize, step: usize, nodes: usize) -> usize {
-    let mixed = (id as u64)
-        .wrapping_mul(6_364_136_223_846_793_005)
-        .wrapping_add((step as u64).wrapping_mul(1_442_695_040_888_963_407));
-    (mixed % nodes as u64) as usize
-}
-
-fn read_fvecs(path: &Path, limit: usize) -> io::Result<Vec<Vec<f32>>> {
-    let mut reader = BufReader::new(File::open(path)?);
-    let mut output = Vec::new();
-    while output.len() < limit {
-        let mut dimension = [0_u8; 4];
-        match reader.read_exact(&mut dimension) {
-            Ok(()) => {}
-            Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => break,
-            Err(error) => return Err(error),
-        }
-        let dimension = u32::from_le_bytes(dimension) as usize;
-        let mut bytes = vec![0_u8; dimension * 4];
-        reader.read_exact(&mut bytes)?;
-        let (values, remainder) = bytes.as_chunks::<4>();
-        debug_assert!(remainder.is_empty());
-        output.push(
-            values
-                .iter()
-                .map(|value| f32::from_le_bytes(*value))
-                .collect(),
-        );
-    }
-    Ok(output)
-}
-
-fn read_ivecs(path: &Path, limit: usize) -> io::Result<Vec<Vec<u32>>> {
-    let mut reader = BufReader::new(File::open(path)?);
-    let mut output = Vec::new();
-    while output.len() < limit {
-        let mut dimension = [0_u8; 4];
-        match reader.read_exact(&mut dimension) {
-            Ok(()) => {}
-            Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => break,
-            Err(error) => return Err(error),
-        }
-        let dimension = u32::from_le_bytes(dimension) as usize;
-        let mut bytes = vec![0_u8; dimension * 4];
-        reader.read_exact(&mut bytes)?;
-        let (values, remainder) = bytes.as_chunks::<4>();
-        debug_assert!(remainder.is_empty());
-        output.push(
-            values
-                .iter()
-                .map(|value| u32::from_le_bytes(*value))
-                .collect(),
-        );
-    }
-    Ok(output)
-}
-
-fn exact_l2(base: &[Vec<f32>], query: &[f32], count: usize) -> HashSet<u64> {
-    let mut distances = base
-        .iter()
-        .enumerate()
-        .map(|(id, vector)| {
-            (
-                id as u64,
-                vector
-                    .iter()
-                    .zip(query)
-                    .map(|(left, right)| {
-                        let difference = left - right;
-                        difference * difference
-                    })
-                    .sum::<f32>(),
-            )
-        })
-        .collect::<Vec<_>>();
-    distances.sort_by(|left, right| left.1.total_cmp(&right.1));
-    distances
-        .into_iter()
-        .take(count)
-        .map(|entry| entry.0)
         .collect()
 }
 
@@ -496,11 +422,14 @@ fn required_path(arguments: &[String], name: &str) -> Result<PathBuf, Box<dyn st
         .ok_or_else(|| format!("missing required option {name}").into())
 }
 
-fn reset_directory(path: &Path) -> io::Result<()> {
-    if path.exists() {
-        fs::remove_dir_all(path)?;
+fn reset_file(path: &Path) -> io::Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
     }
-    fs::create_dir_all(path)
+    if path.exists() {
+        fs::remove_file(path)?;
+    }
+    Ok(())
 }
 
 fn output_writer(path: &Path) -> io::Result<File> {
@@ -508,4 +437,65 @@ fn output_writer(path: &Path) -> io::Result<File> {
         fs::create_dir_all(parent)?;
     }
     File::create(path)
+}
+
+fn read_fvecs(
+    path: &Path,
+    limit: Option<usize>,
+) -> Result<Vec<Vec<f32>>, Box<dyn std::error::Error>> {
+    let mut reader = BufReader::new(File::open(path)?);
+    let mut output = Vec::new();
+    loop {
+        if limit.is_some_and(|limit| output.len() >= limit) {
+            break;
+        }
+        let mut dimension_bytes = [0_u8; 4];
+        match reader.read_exact(&mut dimension_bytes) {
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => break,
+            Err(error) => return Err(error.into()),
+        }
+        let dimension = u32::from_le_bytes(dimension_bytes) as usize;
+        if dimension == 0 || dimension > u16::MAX as usize {
+            return Err(format!("invalid fvec dimension {dimension}").into());
+        }
+        let mut bytes = vec![0_u8; dimension * 4];
+        reader.read_exact(&mut bytes)?;
+        output.push(
+            bytes
+                .chunks_exact(4)
+                .map(|value| f32::from_le_bytes(value.try_into().unwrap()))
+                .collect(),
+        );
+    }
+    Ok(output)
+}
+
+fn read_ivecs(
+    path: &Path,
+    limit: Option<usize>,
+) -> Result<Vec<Vec<usize>>, Box<dyn std::error::Error>> {
+    let mut reader = BufReader::new(File::open(path)?);
+    let mut output = Vec::new();
+    loop {
+        if limit.is_some_and(|limit| output.len() >= limit) {
+            break;
+        }
+        let mut dimension_bytes = [0_u8; 4];
+        match reader.read_exact(&mut dimension_bytes) {
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => break,
+            Err(error) => return Err(error.into()),
+        }
+        let dimension = u32::from_le_bytes(dimension_bytes) as usize;
+        let mut bytes = vec![0_u8; dimension * 4];
+        reader.read_exact(&mut bytes)?;
+        output.push(
+            bytes
+                .chunks_exact(4)
+                .map(|value| u32::from_le_bytes(value.try_into().unwrap()) as usize)
+                .collect(),
+        );
+    }
+    Ok(output)
 }

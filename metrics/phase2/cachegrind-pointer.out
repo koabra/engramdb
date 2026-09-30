@@ -1,7 +1,7 @@
 desc: I1 cache:         32768 B, 64 B, 8-way associative
 desc: D1 cache:         49152 B, 64 B, 12-way associative
 desc: LL cache:         335544320 B, 64 B, 20-way associative
-cmd: target/release/phase2_bench cache-layout --layout fused --output /tmp/engramdb-phase2-validation/cachegrind-fused.csv --iterations 1000
+cmd: target/release/phase2_bench cache-layout --layout pointer --output /tmp/engramdb-phase2-validation/cachegrind-pointer.csv --iterations 1000
 events: Ir I1mr ILmr Dr D1mr DLmr Dw D1mw DLmw Bc Bcm Bi Bim
 fl=./csu/../csu/libc-start.c
 fn=__libc_start_main@@GLIBC_2.34
@@ -2798,7 +2798,7 @@ fn=open
 33 3 0 0 0 0 0 0 0 0 1 1 0 0
 36 5 2 2 0 0 0 3 0 0 0 0 0 0
 37 1 0 0 1 0 0 0 0 0 0 0 0 0
-41 9 0 0 1 1 0 0 0 0 2 1 0 0
+41 9 0 0 1 0 0 0 0 0 2 1 0 0
 43 8 0 0 6 0 0 0 0 0 1 0 0 0
 fl=./io/../sysdeps/unix/sysv/linux/open64_nocancel.c
 fn=__open_nocancel
@@ -3243,7 +3243,7 @@ fn=_int_free
 4517 2128 0 0 0 0 0 0 0 0 0 0 0 0
 4518 6384 0 0 3192 2 0 0 0 0 2128 10 0 0
 4521 1055 0 0 0 0 0 0 0 0 0 0 0 0
-4527 3165 0 0 2110 165 1 0 0 0 1055 0 0 0
+4527 3165 0 0 2110 132 1 0 0 0 1055 0 0 0
 4547 5275 1 1 2110 3 0 0 0 0 1055 27 0 0
 4550 439 0 0 0 0 0 0 0 0 0 0 0 0
 4561 1250 0 0 0 0 0 0 0 0 625 136 0 0
@@ -3275,10 +3275,10 @@ fn=_int_free_merge_chunk
 1992 1125 0 0 375 0 0 0 0 0 375 0 0 0
 4665 3000 2 2 0 0 0 2250 1 0 0 0 0 0
 4666 375 0 0 0 0 0 0 0 0 0 0 0 0
-4670 2250 0 0 375 3 0 0 0 0 375 0 0 0
+4670 2250 0 0 375 2 0 0 0 0 375 0 0 0
 4673 1500 0 0 375 3 0 0 0 0 750 10 0 0
 4675 1125 1 1 375 2 0 0 0 0 0 0 0 0
-4678 1125 0 0 375 116 0 0 0 0 375 0 0 0
+4678 1125 0 0 375 111 0 0 0 0 375 0 0 0
 4681 750 0 0 0 0 0 0 0 0 0 0 0 0
 4682 750 2 1 0 0 0 0 0 0 375 0 0 0
 4683 750 0 0 375 2 0 0 0 0 375 0 0 0
@@ -3291,16 +3291,16 @@ fn=_int_free_merge_chunk
 4701 1125 0 0 0 0 0 0 0 0 0 0 0 0
 4702 2625 0 0 2250 0 0 0 0 0 0 0 0 0
 4714 750 1 1 375 0 0 0 0 0 375 1 0 0
-4720 748 0 0 374 359 0 0 0 0 374 11 0 0
+4720 748 0 0 374 245 0 0 0 0 374 11 0 0
 4721 20 0 0 0 0 0 10 0 0 0 0 0 0
 4722 20 0 0 0 0 0 0 0 0 0 0 0 0
 4724 364 0 0 364 0 0 0 0 0 0 0 0 0
 4732 374 0 0 0 0 0 0 0 0 0 0 0 0
 4733 1496 0 0 374 0 0 0 0 0 0 0 0 0
-4734 748 0 0 374 2 0 0 0 0 374 0 0 0
+4734 748 0 0 374 1 0 0 0 0 374 0 0 0
 4736 374 1 1 0 0 0 374 0 0 0 0 0 0
 4738 748 0 0 0 0 0 0 0 0 374 33 0 0
-4740 1026 1 1 0 0 0 342 26 0 0 0 0 0
+4740 1026 1 1 0 0 0 342 25 0 0 0 0 0
 4743 374 0 0 0 0 0 374 0 0 0 0 0 0
 4744 374 0 0 0 0 0 374 0 0 0 0 0 0
 4746 1122 0 0 0 0 0 374 0 0 0 0 0 0
@@ -3637,7 +3637,7 @@ fn=free
 3363 2104 0 0 0 0 0 0 0 0 1052 2 0 0
 3371 2104 0 0 2104 6 0 0 0 0 0 0 0 0
 3373 1052 0 0 0 0 0 0 0 0 0 0 0 0
-3375 3156 0 0 1052 46 0 0 0 0 1052 0 0 0
+3375 3156 0 0 1052 37 0 0 0 0 1052 0 0 0
 3392 3156 0 0 2104 4 0 0 0 0 1052 0 0 0
 3398 3156 1 1 0 0 0 1052 0 0 0 0 0 0
 3401 1052 0 0 0 0 0 1052 0 0 0 0 0 0
@@ -3647,7 +3647,7 @@ fn=malloc
 1345 5248 1 1 0 0 0 0 0 0 1051 6 0 0
 3178 792 0 0 396 4 0 0 0 0 0 0 0 0
 3182 792 0 0 0 0 0 0 0 0 396 0 0 0
-3186 1584 0 0 396 8 0 396 0 0 0 0 0 0
+3186 1584 0 0 396 7 0 396 0 0 0 0 0 0
 3190 792 0 0 0 0 0 396 0 0 0 0 0 0
 3191 396 0 0 0 0 0 396 0 0 0 0 0 0
 3248 4 1 1 2 0 0 1 0 0 1 0 0 0
@@ -3657,7 +3657,7 @@ fn=malloc
 3313 4204 0 0 2102 4 0 0 0 0 1051 3 0 0
 3316 2102 1 1 1051 2 0 0 0 0 1051 13 0 0
 3317 4 0 0 1 0 0 0 0 0 1 0 0 0
-3318 3150 0 0 1050 6 0 0 0 0 1050 656 0 0
+3318 3150 0 0 1050 5 0 0 0 0 1050 656 0 0
 3326 1310 1 1 655 2 0 0 0 0 655 8 0 0
 3328 2620 1 1 0 0 0 655 1 0 0 0 0 0
 3329 3275 1 1 655 0 0 0 0 0 655 0 0 0
@@ -3775,7 +3775,7 @@ fn=unlink_chunk.isra.0
 1610 3260 2 1 1304 1 0 0 0 0 652 0 0 0
 1613 1304 0 0 1304 3 0 0 0 0 0 0 0 0
 1614 1304 0 0 652 0 0 0 0 0 0 0 0 0
-1616 2608 0 0 1304 103 0 0 0 0 1304 0 0 0
+1616 2608 0 0 1304 102 0 0 0 0 1304 0 0 0
 1619 652 0 0 0 0 0 652 0 0 0 0 0 0
 1620 652 0 0 0 0 0 652 0 0 0 0 0 0
 1621 3011 1 1 569 25 0 0 0 0 1221 77 0 0
@@ -3812,7 +3812,7 @@ fn=munmap
 122 2 0 0 2 0 0 0 0 0 0 0 0 0
 fl=./misc/../sysdeps/unix/sysv/linux/brk.c
 fn=brk
-36 5 3 1 0 0 0 0 0 0 0 0 0 0
+36 5 2 1 0 0 0 0 0 0 0 0 0 0
 37 10 0 0 5 0 0 5 0 0 0 0 0 0
 38 10 0 0 0 0 0 0 0 0 5 0 0 0
 44 5 0 0 0 0 0 0 0 0 0 0 0 0
@@ -3860,7 +3860,7 @@ fn=__init_misc
 40 4 0 0 4 0 0 0 0 0 0 0 0 0
 fl=./misc/./misc/sbrk.c
 fn=sbrk
-37 56 2 1 0 0 0 28 1 0 0 0 0 0
+37 56 1 1 0 0 0 28 1 0 0 0 0 0
 40 14 0 0 14 6 0 0 0 0 0 0 0 0
 43 14 0 0 7 3 0 0 0 0 7 7 0 0
 58 14 3 1 0 0 0 0 0 0 7 1 0 0
@@ -6005,11 +6005,16 @@ fn=__strlen_avx2
 86 52 0 0 0 0 0 0 0 0 52 3 0 0
 87 7 0 0 0 0 0 0 0 0 0 0 0 0
 92 14 0 0 7 0 0 0 0 0 0 0 0 0
-118 16 0 0 0 0 0 0 0 0 0 0 0 0
-131 16 0 0 0 0 0 0 0 0 0 0 0 0
-132 16 0 0 0 0 0 0 0 0 0 0 0 0
-133 16 0 0 0 0 0 0 0 0 0 0 0 0
-139 32 0 0 16 0 0 0 0 0 0 0 0 0
+118 15 0 0 0 0 0 0 0 0 0 0 0 0
+131 15 0 0 0 0 0 0 0 0 0 0 0 0
+132 15 0 0 0 0 0 0 0 0 0 0 0 0
+133 15 0 0 0 0 0 0 0 0 0 0 0 0
+139 30 0 0 15 0 0 0 0 0 0 0 0 0
+143 1 0 0 0 0 0 0 0 0 0 0 0 0
+156 1 0 0 0 0 0 0 0 0 0 0 0 0
+157 1 0 0 0 0 0 0 0 0 0 0 0 0
+158 1 0 0 0 0 0 0 0 0 0 0 0 0
+164 2 0 0 1 0 0 0 0 0 0 0 0 0
 168 9 1 1 0 0 0 0 0 0 0 0 0 0
 181 9 0 0 0 0 0 0 0 0 0 0 0 0
 182 9 0 0 0 0 0 0 0 0 0 0 0 0
@@ -6021,14 +6026,14 @@ fn=__strlen_avx2
 208 20 0 0 0 0 0 0 0 0 0 0 0 0
 214 40 0 0 20 0 0 0 0 0 0 0 0 0
 221 45 1 1 0 0 0 0 0 0 0 0 0 0
-236 45 0 0 45 1 0 0 0 0 0 0 0 0
+236 45 0 0 45 0 0 0 0 0 0 0 0 0
 242 45 0 0 0 0 0 0 0 0 0 0 0 0
 243 45 0 0 0 0 0 0 0 0 0 0 0 0
-244 45 0 0 0 0 0 0 0 0 45 9 0 0
-246 29 0 0 29 0 0 0 0 0 0 0 0 0
-247 29 0 0 0 0 0 0 0 0 0 0 0 0
-248 29 0 0 0 0 0 0 0 0 0 0 0 0
-249 29 0 0 0 0 0 0 0 0 29 0 0 0
+244 45 0 0 0 0 0 0 0 0 45 8 0 0
+246 30 0 0 30 1 0 0 0 0 0 0 0 0
+247 30 0 0 0 0 0 0 0 0 0 0 0 0
+248 30 0 0 0 0 0 0 0 0 0 0 0 0
+249 30 0 0 0 0 0 0 0 0 30 1 0 0
 251 29 0 0 29 0 0 0 0 0 0 0 0 0
 252 29 0 0 0 0 0 0 0 0 0 0 0 0
 253 29 0 0 0 0 0 0 0 0 0 0 0 0
@@ -6108,7 +6113,7 @@ fn=clock_gettime@@GLIBC_2.17
 40 4 0 0 0 0 0 0 0 0 2 1 0 0
 44 4 0 0 2 0 0 0 0 0 0 0 0 0
 68 4 0 0 0 0 0 0 0 0 0 0 0 0
-69 4 1 1 0 0 0 0 0 0 2 0 0 0
+69 4 1 1 0 0 0 0 0 0 2 1 0 0
 fl=./wcsmbs/../sysdeps/x86_64/multiarch/ifunc-avx2.h
 fn=wcschr
 38 8 1 1 0 0 0 0 0 0 2 2 0 0
@@ -6249,7 +6254,7 @@ fn=<alloc::raw_vec::RawVec<engramdb::fused::FusedNode>>::grow_one
 fn=<alloc::raw_vec::RawVecInner<_>>::reserve::do_reserve_and_handle::<alloc::alloc::Global>
 0 300 4 4 70 0 0 50 0 0 15 0 0 0
 fn=<alloc::raw_vec::RawVecInner>::finish_grow
-0 711 11 9 124 0 0 164 0 0 65 27 17 3
+0 711 9 9 124 0 0 164 0 0 65 26 17 3
 fn=<alloc::string::String as core::clone::Clone>::clone
 0 62 2 2 20 0 0 20 0 0 4 0 4 2
 fn=<alloc::string::String as core::fmt::Write>::write_str
@@ -6261,11 +6266,11 @@ fn=<blake3::ChunkState>::update
 fn=<blake3::Output>::root_hash
 0 10752 3 3 4224 1 1 2304 0 0 0 0 768 2
 fn=<core::ffi::c_str::CStr>::from_bytes_with_nul
-0 93 5 5 13 0 0 4 0 0 19 7 0 0
+0 103 5 5 15 0 0 4 0 0 23 7 0 0
 fn=<core::fmt::Formatter>::pad
 0 25 3 3 10 0 0 6 0 0 1 1 1 1
 fn=<core::fmt::Formatter>::pad_integral
-0 22116 4 4 5044 0 0 3492 0 0 1164 1 388 2
+0 22116 4 4 5044 0 0 3492 0 0 1164 2 388 2
 fn=<core::fmt::Formatter>::pad_integral::write_prefix
 0 8148 3 2 2328 0 0 1940 0 0 776 16 0 0
 fn=<crc32fast::Hasher>::internal_new_specialized
@@ -6275,7 +6280,7 @@ fn=<engramdb::fused::FusedBlockBuilder>::finish
 fn=<engramdb::fused::FusedBlockBuilder>::push
 0 469516 9 9 68742 2135 0 2310 203 197 131968 279 6 1
 fn=<engramdb::fused::FusedBlockView>::node
-0 19238400 12 12 3591168 333 0 2693376 5 0 2949888 8 0 0
+0 38400 12 12 7168 224 0 5376 3 0 5888 8 0 0
 fn=<engramdb::fused::FusedBlockView>::parse
 0 2034 11 11 285 5 0 664 4 0 271 129 129 2
 fn=<engramdb::fused::FusedNode>::new::<alloc::string::String>
@@ -6283,7 +6288,7 @@ fn=<engramdb::fused::FusedNode>::new::<alloc::string::String>
 fn=<engramdb::fused::QuantizedVector>::from_f32
 0 13624 16 16 2209 30 4 1187 12 0 1238 42 515 6
 fn=<engramdb::io::AlignedPage as core::ops::drop::Drop>::drop
-0 12 1 1 4 0 0 0 0 0 2 1 1 1
+0 12 1 1 4 1 0 0 0 0 2 1 1 1
 fn=<std::fs::DirBuilder>::_create
 0 199 20 20 35 3 2 61 2 0 21 6 11 11
 fn=<std::fs::File as std::io::Write>::write_all
@@ -6295,11 +6300,11 @@ fn=<std::io::default_write_fmt::Adapter<std::fs::File> as core::fmt::Write>::wri
 fn=<std::path::Components as core::cmp::PartialEq>::eq
 0 146 10 10 56 2 0 50 3 0 10 8 4 2
 fn=<std::path::Components as core::iter::traits::double_ended::DoubleEndedIterator>::next_back
-0 546 9 9 132 0 0 90 5 0 64 12 0 0
+0 546 9 9 132 0 0 90 5 0 64 11 0 0
 fn=<std::path::Components>::as_path
 0 240 8 8 68 1 0 64 0 0 28 7 0 0
 fn=<std::path::Components>::parse_next_component_back
-0 1971 4 4 252 0 0 50 1 0 454 23 0 0
+0 1987 4 4 254 0 0 50 1 0 458 23 0 0
 fn=<std::sync::once::Once>::call_once::<std::rt::cleanup::{closure#0}>::{closure#0}
 0 131 14 14 34 7 0 26 3 0 18 3 5 5
 fn=<std::sync::once::Once>::call_once_force::<<std::sync::once_lock::OnceLock<std::sync::reentrant_lock::ReentrantLock<core::cell::RefCell<std::io::buffered::linewriter::LineWriter<std::io::stdio::StdoutRaw>>>>>::initialize<<std::sync::once_lock::OnceLock<std::sync::reentrant_lock::ReentrantLock<core::cell::RefCell<std::io::buffered::linewriter::LineWriter<std::io::stdio::StdoutRaw>>>>>::get_or_init<std::io::stdio::cleanup::{closure#0}>::{closure#0}, !>::{closure#0}>::{closure#0}
@@ -6319,13 +6324,13 @@ fn=<std::sys::sync::once::futex::Once>::call
 fn=<std::time::Instant>::elapsed
 0 26 2 2 8 0 0 8 0 0 0 0 0 0
 fn=<u128 as core::fmt::Display>::fmt
-0 89 7 7 15 1 0 10 0 0 7 4 1 1
+0 85 7 7 14 1 0 9 0 0 7 5 1 1
 fn=<u64 as core::fmt::Display>::fmt
 0 9675 4 2 2322 1 0 1935 0 0 0 0 387 1
 fn=<u64>::_fmt_inner
 0 14196 9 7 2801 8 4 2414 0 0 1167 15 0 0
 fn=???
-0 179899 52 39 4081 19 1 793 1 1 2710 16 193 16
+0 179899 51 39 4081 19 1 793 1 1 2710 16 193 16
 fn=__cpu_indicator_init
 0 367 40 40 48 2 1 14 0 0 101 26 0 0
 fn=__rustc::__rust_alloc
@@ -6345,19 +6350,19 @@ fn=core::core_arch::x86::xsave::_xgetbv
 fn=core::fmt::write
 0 29051 11 6 6188 3 1 5799 0 0 3882 268 778 6
 fn=core::ptr::drop_glue::<alloc::vec::Vec<alloc::boxed::Box<[i8]>>>
-0 1046 3 3 266 32 0 133 0 0 258 4 129 2
+0 1046 3 3 266 2 0 133 0 0 258 4 129 2
 fn=core::ptr::drop_glue::<alloc::vec::into_iter::IntoIter<engramdb::fused::FusedNode>>
 0 23 3 3 9 1 0 5 0 0 2 1 1 1
 fn=core::str::converts::from_utf8
-0 660 4 4 112 0 0 48 1 1 172 34 0 0
+0 680 4 4 116 0 0 48 1 1 180 33 0 0
 fn=crc32fast::hash
 0 54 3 3 12 0 0 8 1 0 6 3 2 1
 fn=crc32fast::specialized::pclmulqdq::calculate
 0 59404 12 12 8194 1927 1 0 0 0 2052 20 0 0
 fn=engramdb::fused::dot_i8
-0 768000 2 2 256000 2 0 0 0 0 256000 0 0 0
+0 768000 2 2 256000 2 0 0 0 0 256000 3 0 0
 fn=engramdb::fused::dot_i8_avx2
-0 14862964 8 8 4356386 439 0 128129 0 0 1153161 16 0 0
+0 14862964 8 8 4356386 372 0 128129 0 0 1153161 28 0 0
 fn=engramdb::fused::region
 0 124 3 3 40 0 0 44 1 0 4 3 0 0
 fn=main
@@ -6371,7 +6376,7 @@ fn=phase2_bench::main
 fn=phase2_bench::output_writer
 0 76 7 6 16 3 0 27 1 0 7 2 5 5
 fn=phase2_bench::run
-0 2704357 78 77 1030918 212 1 643892 223 205 257995 1044 256163 27
+0 1167365 75 74 389924 235 1 131893 225 205 129994 1042 128163 26
 fn=phase2_bench::usize_option
 0 141 8 8 24 0 0 12 0 0 27 12 4 4
 fn=roundf
@@ -6398,4 +6403,4 @@ fn=std::sys::pal::unix::stack_overflow::thread_info::set_current_info
 0 108 12 12 31 3 0 31 1 1 14 6 4 4
 fn=std_detect::detect::cache::detect_and_initialize
 0 313 21 21 16 0 0 18 0 0 11 4 0 0
-summary: 41606358 2364 2262 9869088 15536 1846 3760946 6601 4894 5219627 10861 297255 428
+summary: 20869412 2356 2259 5644102 15187 1846 560946 6600 4894 2147643 10874 169255 427

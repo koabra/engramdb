@@ -19,6 +19,12 @@ pub enum Error {
     MetadataPoisoned,
     #[error("node payload is too large ({actual} > {maximum} bytes)")]
     NodeTooLarge { actual: usize, maximum: usize },
+    #[error("fused block requires {required} bytes but only {available} are available")]
+    FusedBlockFull { required: usize, available: usize },
+    #[error("vector dimensions differ ({expected} != {actual})")]
+    DimensionMismatch { expected: usize, actual: usize },
+    #[error("vector must be non-empty, finite, and no larger than 65535 dimensions")]
+    InvalidVector,
     #[error("branch {0} does not exist")]
     UnknownBranch(Uuid),
     #[error("branch {0} changed while the transaction was open")]

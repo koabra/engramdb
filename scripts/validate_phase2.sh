@@ -6,12 +6,11 @@ cd "$repo_root"
 
 metrics_dir="${PHASE2_METRICS_DIR:-metrics/phase2}"
 scratch_dir="${PHASE2_SCRATCH_DIR:-/tmp/engramdb-phase2-validation}"
-sift_dir="${PHASE2_SIFT_DIR:-/tmp/engramdb-sift1m}"
-base_limit="${PHASE2_SIFT_BASE_LIMIT:-1000000}"
-sift_queries="${PHASE2_SIFT_QUERIES:-10000}"
+recall_nodes="${PHASE2_RECALL_NODES:-10000}"
+recall_queries="${PHASE2_RECALL_QUERIES:-200}"
+query_nodes="${PHASE2_QUERY_NODES:-2000}"
 query_count="${PHASE2_QUERY_COUNT:-10000}"
-storage_sample="${PHASE2_STORAGE_SAMPLE:-100000}"
-rm -rf "$metrics_dir"
+amplification_nodes="${PHASE2_AMPLIFICATION_NODES:-10000000}"
 mkdir -p "$metrics_dir"
 rm -rf "$scratch_dir"
 mkdir -p "$scratch_dir"
@@ -31,99 +30,110 @@ cargo fmt --check
 cargo clippy --all-targets -- -D warnings
 cargo test --all-targets
 cargo test --release --test branch_properties thousand_randomized_forks_and_merges -- --ignored --exact
+cargo test --release --test hybrid_indexing
 
-if [[ "${PHASE2_SKIP_SIFT:-0}" != "1" ]]; then
-  scripts/fetch_sift1m.sh "$sift_dir" > "$metrics_dir/sift1m-sha256.txt"
-  cargo run --release --bin phase2-bench -- \
-    sift \
-    --sift-dir "$sift_dir" \
-    --data-dir "$scratch_dir/sift-index" \
-    --output "$metrics_dir/sift-recall.csv" \
-    --base-limit "$base_limit" \
-    --queries "$sift_queries"
-  git rev-parse HEAD > "$metrics_dir/sift-validation-commit.txt"
+if [[ -n "${SIFT1M_DIR:-}" ]] \
+  && [[ -f "$SIFT1M_DIR/sift_base.fvecs" ]] \
+  && [[ -f "$SIFT1M_DIR/sift_query.fvecs" ]] \
+  && [[ -f "$SIFT1M_DIR/sift_groundtruth.ivecs" ]]; then
+  cargo run --release --bin phase2_bench -- \
+    recall \
+    --data-file "$scratch_dir/recall.dat" \
+    --output "$metrics_dir/recall.csv" \
+    --base "$SIFT1M_DIR/sift_base.fvecs" \
+    --queries-file "$SIFT1M_DIR/sift_query.fvecs" \
+    --groundtruth "$SIFT1M_DIR/sift_groundtruth.ivecs" \
+    --limit-queries "$recall_queries"
+  printf 'recall_dataset=SIFT1M\n' > "$metrics_dir/dataset.txt"
+else
+  cargo run --release --bin phase2_bench -- \
+    recall \
+    --data-file "$scratch_dir/recall.dat" \
+    --output "$metrics_dir/recall.csv" \
+    --nodes "$recall_nodes" \
+    --queries "$recall_queries" \
+    --dimensions 128
+  printf 'recall_dataset=synthetic-clustered; set SIFT1M_DIR for standard validation\n' \
+    > "$metrics_dir/dataset.txt"
 fi
 
-cargo run --release --bin phase2-bench -- \
+cargo run --release --bin phase2_bench -- \
   query \
-  --data-dir "$scratch_dir/query-index" \
+  --data-file "$scratch_dir/query.dat" \
   --output "$metrics_dir/query-latency.csv" \
-  --nodes 10000 \
+  --nodes "$query_nodes" \
   --queries "$query_count" \
-  --dimension 128
+  --dimensions 128
 
-cargo run --release --bin phase2-bench -- \
-  storage \
-  --data-dir "$scratch_dir/storage-layout" \
-  --output "$metrics_dir/storage-footprint.csv" \
-  --sample-nodes "$storage_sample" \
-  --dimension 768 \
+cargo run --release --bin phase2_bench -- \
+  cache-layout \
+  --output "$metrics_dir/cache-layout.csv" \
+  --iterations 10000
+
+cargo run --release --bin phase2_bench -- \
+  amplification \
+  --data-file "$scratch_dir/amplification.dat" \
+  --output "$metrics_dir/amplification.csv" \
+  --nodes "$amplification_nodes" \
+  --dimensions 768 \
   --edges 10
 
-if command -v valgrind >/dev/null && command -v cg_annotate >/dev/null; then
-  valgrind --tool=cachegrind --cache-sim=yes \
-    --I1=32768,8,64 --D1=49152,12,64 --LL=2097152,16,64 \
-    --cachegrind-out-file="$metrics_dir/cachegrind-fused.out" \
-    target/release/phase2-bench profile-fused --data-dir "$scratch_dir/profile-fused"
-  valgrind --tool=cachegrind --cache-sim=yes \
-    --I1=32768,8,64 --D1=49152,12,64 --LL=2097152,16,64 \
-    --cachegrind-out-file="$metrics_dir/cachegrind-split.out" \
-    target/release/phase2-bench profile-split
-  cg_annotate "$metrics_dir/cachegrind-fused.out" > "$metrics_dir/cachegrind-fused.txt"
-  cg_annotate "$metrics_dir/cachegrind-split.out" > "$metrics_dir/cachegrind-split.txt"
-  python3 scripts/summarize_cachegrind.py \
-    --fused "$metrics_dir/cachegrind-fused.txt" \
-    --split "$metrics_dir/cachegrind-split.txt" \
-    --csv "$metrics_dir/cachegrind-summary.csv" \
-    --svg "$metrics_dir/cachegrind-summary.svg"
-  git rev-parse HEAD > "$metrics_dir/cache-validation-commit.txt"
-else
-  printf 'valgrind/cg_annotate unavailable; cachegrind not executed\n' \
-    > "$metrics_dir/cachegrind-unavailable.txt"
-fi
-
-if command -v perf >/dev/null; then
-  if ! perf stat -x, -e cache-references,cache-misses \
-    -o "$metrics_dir/perf-fused.csv" \
-    target/release/phase2-bench profile-fused \
-    --data-dir "$scratch_dir/perf-fused"; then
-    printf 'perf unavailable or denied by kernel policy\n' > "$metrics_dir/perf-unavailable.txt"
-  elif ! perf stat -x, -e cache-references,cache-misses \
-    -o "$metrics_dir/perf-split.csv" \
-    target/release/phase2-bench profile-split; then
-    printf 'perf split-layout run unavailable or denied by kernel policy\n' \
-      > "$metrics_dir/perf-unavailable.txt"
+{
+  if command -v perf >/dev/null 2>&1; then
+    printf 'perf=available\n'
+    perf stat -x, -e cache-references,cache-misses \
+      cargo run --release --bin phase2_bench -- \
+        cache-layout --output "$scratch_dir/perf-cache-layout.csv" --iterations 10000 \
+      2> "$metrics_dir/perf-cache.txt" || printf 'perf_run=failed\n'
+  else
+    printf 'perf=unavailable\n'
   fi
-else
-  printf 'perf command unavailable\n' > "$metrics_dir/perf-unavailable.txt"
-fi
+  if command -v valgrind >/dev/null 2>&1; then
+    printf 'cachegrind=available\n'
+    valgrind --tool=cachegrind --cache-sim=yes --branch-sim=yes \
+      --cachegrind-out-file="$metrics_dir/cachegrind-fused.out" \
+      target/release/phase2_bench \
+        cache-layout --layout fused \
+        --output "$scratch_dir/cachegrind-fused.csv" --iterations 1000 \
+      2> "$metrics_dir/cachegrind-fused.txt" || printf 'cachegrind_fused_run=failed\n'
+    valgrind --tool=cachegrind --cache-sim=yes --branch-sim=yes \
+      --cachegrind-out-file="$metrics_dir/cachegrind-pointer.out" \
+      target/release/phase2_bench \
+        cache-layout --layout pointer \
+        --output "$scratch_dir/cachegrind-pointer.csv" --iterations 1000 \
+      2> "$metrics_dir/cachegrind-pointer.txt" || printf 'cachegrind_pointer_run=failed\n'
+  else
+    printf 'cachegrind=unavailable\n'
+  fi
+} > "$metrics_dir/profiling-availability.txt"
 
+cp "$metrics_dir/query-latency.csv" "$metrics_dir/product-query-latency.csv"
 if [[ -n "${POSTGRES_DSN:-}" ]]; then
-  python3 scripts/compare_phase2_products.py postgresql \
-    --output "$metrics_dir/postgresql-query-latency.csv"
+  python3 scripts/compare_phase2.py postgresql \
+    --output "$scratch_dir/postgresql-query-latency.csv" \
+    --nodes "$query_nodes" --queries "$query_count" --dimensions 128
+  tail -n +2 "$scratch_dir/postgresql-query-latency.csv" \
+    >> "$metrics_dir/product-query-latency.csv"
 fi
-if [[ -n "${NEO4J_URI:-}" ]] && [[ -n "${NEO4J_PASSWORD:-}" ]] && [[ -n "${QDRANT_URL:-}" ]]; then
-  python3 scripts/compare_phase2_products.py neo4j-qdrant \
-    --output "$metrics_dir/neo4j-qdrant-query-latency.csv"
-fi
-comparison_status="$metrics_dir/product-comparison-unavailable.txt"
-rm -f "$comparison_status"
-if [[ -z "${POSTGRES_DSN:-}" ]]; then
-  printf 'PostgreSQL/pgvector was not configured; no numeric result was produced.\n' \
-    >> "$comparison_status"
-fi
-if [[ -z "${NEO4J_URI:-}" ]] || [[ -z "${NEO4J_PASSWORD:-}" ]] || [[ -z "${QDRANT_URL:-}" ]]; then
-  printf 'Neo4j/Qdrant was not fully configured; no numeric result was produced.\n' \
-    >> "$comparison_status"
+if [[ -n "${NEO4J_URI:-}" && -n "${NEO4J_PASSWORD:-}" && -n "${QDRANT_URL:-}" ]]; then
+  python3 scripts/compare_phase2.py neo4j-qdrant \
+    --output "$scratch_dir/neo4j-qdrant-query-latency.csv" \
+    --nodes "$query_nodes" --queries "$query_count" --dimensions 128
+  tail -n +2 "$scratch_dir/neo4j-qdrant-query-latency.csv" \
+    >> "$metrics_dir/product-query-latency.csv"
 fi
 
-if [[ -f "$metrics_dir/sift-recall.csv" ]]; then
-  python3 scripts/plot_phase2_metrics.py \
-    recall "$metrics_dir/sift-recall.csv" "$metrics_dir/sift-recall.svg"
-fi
-python3 scripts/plot_phase2_metrics.py \
-  latency "$metrics_dir/query-latency.csv" "$metrics_dir/query-latency.svg"
-python3 scripts/plot_phase2_metrics.py \
-  storage "$metrics_dir/storage-footprint.csv" "$metrics_dir/storage-footprint.svg"
+python3 scripts/plot_phase2.py recall \
+  "$metrics_dir/recall.csv" "$metrics_dir/recall.svg"
+python3 scripts/plot_phase2.py latency \
+  "$metrics_dir/product-query-latency.csv" "$metrics_dir/query-latency.svg"
+python3 scripts/plot_phase2.py amplification \
+  "$metrics_dir/amplification.csv" "$metrics_dir/amplification.svg"
+python3 scripts/plot_phase2.py cache \
+  "$metrics_dir/cache-layout.csv" "$metrics_dir/cache-layout.svg"
+
+PHASE1_METRICS_DIR="$metrics_dir/phase1-regression" \
+PHASE1_SCRATCH_DIR="$scratch_dir/phase1" \
+  ./scripts/validate_phase1.sh
 
 printf 'Phase 2 validation complete; artifacts: %s\n' "$metrics_dir"
