@@ -21,7 +21,7 @@ class SglangKvCacheAdapter:
         self, session_id: str, destination: Any | None = None
     ) -> tuple[memoryview, dict] | dict:
         buffer, spec = self.client.get_kv_cache(session_id)
-        source = memoryview(buffer)
+        source = memoryview(buffer).cast("B")
         if destination is None:
             return source, spec
         target = memoryview(destination).cast("B")
