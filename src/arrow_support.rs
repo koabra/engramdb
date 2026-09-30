@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use arrow::array::{
-    ArrayRef, FixedSizeBinaryBuilder, FixedSizeListArray, Float32Array, Float32Builder,
+    Array, ArrayRef, FixedSizeBinaryBuilder, FixedSizeListArray, Float32Array, Float32Builder,
     Int64Builder, Int8Array, ListBuilder, StructBuilder, UInt16Builder, UInt32Array, UInt64Builder,
 };
 use arrow::datatypes::{DataType, Field, Fields, Schema};
