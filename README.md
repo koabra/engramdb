@@ -1,8 +1,8 @@
 # EngramDB
 
-EngramDB Phase 1 is a Linux-only, content-addressed storage foundation for
-durable, copy-on-write branches and bitemporal records. It intentionally does
-not include Phase 2 hybrid/vector indexing or a query execution layer.
+EngramDB Phase 2 is a Linux-only prototype that combines the Phase 1
+content-addressed storage foundation with 64 KiB fused vector, graph, and
+temporal blocks. Query execution remains reserved for Phase 3.
 
 ## Storage model
 
@@ -17,6 +17,19 @@ not include Phase 2 hybrid/vector indexing or a query execution layer.
   every committed DAG.
 - The user-space CLOCK cache exposes immutable `Arc<Page>` values through
   hazard-pointer-protected atomic loads.
+
+## Hybrid index
+
+- Phase 1 tree pages remain 4 KiB; layout-aware direct I/O also supports a
+  separate 64 KiB fused-block file without changing the Phase 1 format.
+- Each fused block tightly packs a 64-byte header, node directory, temporal
+  points, INT8 vectors, and CSR-style outbound edges. CRC32 protects the full
+  payload.
+- `HybridIndex` supports cosine or squared-L2 HNSW search and filtered,
+  multi-hop graph traversal. AVX2 and NEON kernels scan quantized vectors
+  directly from aligned block memory without constructing `Vec<f32>` values.
+- The fused blocks are durable, while the prototype HNSW graph is rebuilt from
+  block contents on open.
 
 ## Minimal use
 
@@ -64,3 +77,15 @@ python scripts/compare_products.py mongodb \
 
 These results are kept separate from local EngramDB measurements so unavailable
 products never produce synthetic or inferred numbers.
+
+Run Phase 2 validation (including Phase 1 regressions):
+
+```bash
+SIFT1M_DIR=/path/to/sift1m ./scripts/validate_phase2.sh
+```
+
+The directory must contain `sift_base.fvecs`, `sift_query.fvecs`, and
+`sift_groundtruth.ivecs`. Without it, the script runs the same Recall@10
+pipeline on a deterministic synthetic corpus. Raw measurements and plots are
+under [`metrics/phase2/`](metrics/phase2/); interpretation and limitations are
+in [`docs/phase2-validation.md`](docs/phase2-validation.md).

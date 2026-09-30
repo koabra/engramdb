@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="860" height="460" viewBox="0 0 860 460">
+<rect width="100%" height="100%" fill="white"/>
+<style>text{font-family:system-ui,sans-serif;fill:#111827}.grid{stroke:#e5e7eb}.axis{stroke:#374151;stroke-width:1.5}</style>
+<text x="430" y="34" text-anchor="middle" font-size="20" font-weight="600">10,000,000 nodes: storage footprint</text><text x="155" y="130" text-anchor="end" font-size="13">FP32 source</text><rect x="170" y="105" width="550.00" height="38" fill="#9ca3af" rx="4"/><text x="730.00" y="130" font-size="13">32.78 GiB</text><text x="155" y="220" text-anchor="end" font-size="13">INT8 encoded</text><rect x="170" y="195" width="195.00" height="38" fill="#16a34a" rx="4"/><text x="375.00" y="220" font-size="13">11.62 GiB</text><text x="155" y="310" text-anchor="end" font-size="13">64 KiB blocks</text><rect x="170" y="285" width="196.92" height="38" fill="#2563eb" rx="4"/><text x="376.92" y="310" font-size="13">11.74 GiB</text>
+</svg>

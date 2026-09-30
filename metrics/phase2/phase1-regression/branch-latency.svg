@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="520" viewBox="0 0 900 520">
+<rect width="100%" height="100%" fill="white"/>
+<style>text{font-family:system-ui,sans-serif;fill:#111827}.grid{stroke:#e5e7eb}.axis{stroke:#374151;stroke-width:1.5}.p95{stroke-dasharray:6 5}</style>
+<text x="450.0" y="28" text-anchor="middle" font-size="20" font-weight="600">Durable branch creation latency</text>
+<line class="axis" x1="90" y1="55" x2="90" y2="445"/>
+<line class="axis" x1="90" y1="445" x2="865" y2="445"/>
+<line class="grid" x1="90.00" y1="55" x2="90.00" y2="445"/>
+<text x="90.00" y="469" text-anchor="middle" font-size="12">1</text>
+<line class="grid" x1="348.33" y1="55" x2="348.33" y2="445"/>
+<text x="348.33" y="469" text-anchor="middle" font-size="12">10</text>
+<line class="grid" x1="606.67" y1="55" x2="606.67" y2="445"/>
+<text x="606.67" y="469" text-anchor="middle" font-size="12">100</text>
+<line class="grid" x1="865.00" y1="55" x2="865.00" y2="445"/>
+<text x="865.00" y="469" text-anchor="middle" font-size="12">1000</text>
+<line class="grid" x1="90" y1="445.00" x2="865" y2="445.00"/>
+<text x="80" y="449.00" text-anchor="end" font-size="12">943</text>
+<line class="grid" x1="90" y1="367.00" x2="865" y2="367.00"/>
+<text x="80" y="371.00" text-anchor="end" font-size="12">4818</text>
+<line class="grid" x1="90" y1="289.00" x2="865" y2="289.00"/>
+<text x="80" y="293.00" text-anchor="end" font-size="12">24611</text>
+<line class="grid" x1="90" y1="211.00" x2="865" y2="211.00"/>
+<text x="80" y="215.00" text-anchor="end" font-size="12">125707</text>
+<line class="grid" x1="90" y1="133.00" x2="865" y2="133.00"/>
+<text x="80" y="137.00" text-anchor="end" font-size="12">642078</text>
+<line class="grid" x1="90" y1="55.00" x2="865" y2="55.00"/>
+<text x="80" y="59.00" text-anchor="end" font-size="12">3279547</text>
+<polyline points="90.00,434.33 348.33,330.46 606.67,225.94 865.00,92.21" fill="none" stroke="#2563eb" stroke-width="2.5" class=""/>
+<circle cx="90.00" cy="434.33" r="3.5" fill="#2563eb"/>
+<circle cx="348.33" cy="330.46" r="3.5" fill="#2563eb"/>
+<circle cx="606.67" cy="225.94" r="3.5" fill="#2563eb"/>
+<circle cx="865.00" cy="92.21" r="3.5" fill="#2563eb"/>
+<line x1="715" y1="62" x2="745" y2="62" stroke="#2563eb" stroke-width="2.5" class=""/>
+<text x="753" y="66" font-size="12">engramdb p50</text>
+<polyline points="90.00,434.33 348.33,321.00 606.67,194.49 865.00,65.67" fill="none" stroke="#2563eb" stroke-width="2.5" class="p95"/>
+<circle cx="90.00" cy="434.33" r="3.5" fill="#2563eb"/>
+<circle cx="348.33" cy="321.00" r="3.5" fill="#2563eb"/>
+<circle cx="606.67" cy="194.49" r="3.5" fill="#2563eb"/>
+<circle cx="865.00" cy="65.67" r="3.5" fill="#2563eb"/>
+<line x1="715" y1="79" x2="745" y2="79" stroke="#2563eb" stroke-width="2.5" class="p95"/>
+<text x="753" y="83" font-size="12">engramdb p95</text>
+<text x="477.5" y="500" text-anchor="middle" font-size="14">Concurrent requests (log scale)</text>
+<text x="20" y="250.0" text-anchor="middle" font-size="14" transform="rotate(-90 20 250.0)">Latency (µs, log scale)</text>
+</svg>
