@@ -24,8 +24,8 @@ pub use hazard::{HazardAtomic, HazardDomain, HazardGuard};
 pub use hybrid::{
     dot_i8, selected_simd_flavor, BlockLocation, DistanceMetric, FusedBlockBuilder,
     FusedBlockHeader, FusedBlockView, FusedRecordView, GraphEdge, GraphEdgeIter, HnswConfig,
-    HybridIndex, HybridRecord, PackedGraphEdge, QueryHit, QueryResult, QueryStats, RecordMetadata,
-    SearchCandidate, SimdFlavor, TemporalEntry, FUSED_HEADER_SIZE,
+    HybridFaultPoint, HybridIndex, HybridRecord, PackedGraphEdge, QueryHit, QueryResult,
+    QueryStats, RecordMetadata, SearchCandidate, SimdFlavor, TemporalEntry, FUSED_HEADER_SIZE,
 };
 pub use io::{AlignedBlock, AlignedPage, DirectIo, IoStats, FUSED_BLOCK_SIZE, PAGE_SIZE};
 pub use tree::{Hash, NodeRef};

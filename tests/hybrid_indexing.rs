@@ -3,8 +3,8 @@ use std::mem::size_of;
 
 use engramdb::{
     dot_i8, DistanceMetric, FusedBlockBuilder, FusedBlockHeader, FusedBlockView, GraphEdge,
-    HnswConfig, HybridIndex, HybridRecord, PackedGraphEdge, TemporalEntry, FUSED_BLOCK_SIZE,
-    FUSED_HEADER_SIZE,
+    HnswConfig, HybridFaultPoint, HybridIndex, HybridRecord, PackedGraphEdge, TemporalEntry,
+    FUSED_BLOCK_SIZE, FUSED_HEADER_SIZE,
 };
 use tempfile::tempdir;
 
@@ -191,6 +191,70 @@ fn multimodal_traversal_matches_brute_force_and_recovers() {
         .map(|hit| hit.id)
         .collect::<HashSet<_>>();
     assert_eq!(recovered, expected);
+}
+
+#[test]
+fn fused_generation_faults_recover_previous_watermark() {
+    for fault in [
+        HybridFaultPoint::AfterBlockWrites,
+        HybridFaultPoint::AfterBlockSync,
+        HybridFaultPoint::DuringManifestWrite,
+    ] {
+        let directory = tempdir().unwrap();
+        let committed_bytes;
+        {
+            let mut index = HybridIndex::open(
+                directory.path(),
+                8,
+                DistanceMetric::Cosine,
+                HnswConfig::default(),
+            )
+            .unwrap();
+            index
+                .insert(1, vec![record(1, vec![1.0; 8], Vec::new())])
+                .unwrap();
+            committed_bytes = index.disk_bytes();
+            assert!(index
+                .insert_with_fault(2, vec![record(2, vec![0.5; 8], Vec::new())], fault,)
+                .is_err());
+        }
+        let reopened = HybridIndex::open(
+            directory.path(),
+            8,
+            DistanceMetric::Cosine,
+            HnswConfig::default(),
+        )
+        .unwrap();
+        assert_eq!(reopened.len(), 1);
+        assert_eq!(reopened.disk_bytes(), committed_bytes);
+    }
+}
+
+#[test]
+fn hybrid_index_excludes_concurrent_openers() {
+    let directory = tempdir().unwrap();
+    let first = HybridIndex::open(
+        directory.path(),
+        8,
+        DistanceMetric::Cosine,
+        HnswConfig::default(),
+    )
+    .unwrap();
+    assert!(HybridIndex::open(
+        directory.path(),
+        8,
+        DistanceMetric::Cosine,
+        HnswConfig::default(),
+    )
+    .is_err());
+    drop(first);
+    HybridIndex::open(
+        directory.path(),
+        8,
+        DistanceMetric::Cosine,
+        HnswConfig::default(),
+    )
+    .unwrap();
 }
 
 fn brute_force(

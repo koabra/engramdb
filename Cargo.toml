@@ -29,3 +29,7 @@ codegen-units = 1
 [[bin]]
 name = "phase1-bench"
 path = "src/bin/phase1_bench.rs"
+
+[[bin]]
+name = "phase2-bench"
+path = "src/bin/phase2_bench.rs"
