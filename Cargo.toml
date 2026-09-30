@@ -3,7 +3,7 @@ name = "engramdb"
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.85"
-description = "Content-addressed hybrid storage with EnQL and Arrow Flight"
+description = "Branchable hybrid storage with Arrow Flight and KV-cache streaming"
 license = "Apache-2.0"
 
 [dependencies]

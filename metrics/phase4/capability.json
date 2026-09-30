@@ -1,0 +1,14 @@
+{
+  "linux": true,
+  "nvidia_driver": false,
+  "nvidia_fs": false,
+  "cuda_visible": false,
+  "libcufile_path": null,
+  "cufile_driver_opened": false,
+  "gdsio_path": null,
+  "transfer_path": "CpuDirect",
+  "notes": [
+    "binary compiled without the optional `gds` feature",
+    "using 4 KiB-aligned CPU direct-I/O fallback"
+  ]
+}
