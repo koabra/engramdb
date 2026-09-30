@@ -70,6 +70,11 @@ if command -v valgrind >/dev/null && command -v cg_annotate >/dev/null; then
     target/release/phase2-bench profile-split
   cg_annotate "$metrics_dir/cachegrind-fused.out" > "$metrics_dir/cachegrind-fused.txt"
   cg_annotate "$metrics_dir/cachegrind-split.out" > "$metrics_dir/cachegrind-split.txt"
+  python3 scripts/summarize_cachegrind.py \
+    --fused "$metrics_dir/cachegrind-fused.txt" \
+    --split "$metrics_dir/cachegrind-split.txt" \
+    --csv "$metrics_dir/cachegrind-summary.csv" \
+    --svg "$metrics_dir/cachegrind-summary.svg"
 else
   printf 'valgrind/cg_annotate unavailable; cachegrind not executed\n' \
     > "$metrics_dir/cachegrind-unavailable.txt"
