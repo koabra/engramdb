@@ -104,6 +104,16 @@ if [[ -n "${NEO4J_URI:-}" ]] && [[ -n "${NEO4J_PASSWORD:-}" ]] && [[ -n "${QDRAN
   python3 scripts/compare_phase2_products.py neo4j-qdrant \
     --output "$metrics_dir/neo4j-qdrant-query-latency.csv"
 fi
+comparison_status="$metrics_dir/product-comparison-unavailable.txt"
+rm -f "$comparison_status"
+if [[ -z "${POSTGRES_DSN:-}" ]]; then
+  printf 'PostgreSQL/pgvector was not configured; no numeric result was produced.\n' \
+    >> "$comparison_status"
+fi
+if [[ -z "${NEO4J_URI:-}" ]] || [[ -z "${NEO4J_PASSWORD:-}" ]] || [[ -z "${QDRANT_URL:-}" ]]; then
+  printf 'Neo4j/Qdrant was not fully configured; no numeric result was produced.\n' \
+    >> "$comparison_status"
+fi
 
 if [[ -f "$metrics_dir/sift-recall.csv" ]]; then
   python3 scripts/plot_phase2_metrics.py \

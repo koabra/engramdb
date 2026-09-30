@@ -168,9 +168,20 @@ fn multimodal_traversal_matches_brute_force_and_recovers() {
                 edge_type: 1,
             })
             .collect::<Vec<_>>();
-        let item = record(id, vector, edges);
-        source.insert(id, item.clone());
+        let mut item = record(id, vector, edges);
+        if id > 0 && id % 7 == 0 {
+            item.valid_to = 40;
+        }
+        source.entry(id).or_insert_with(Vec::new).push(item.clone());
         records.push(item);
+        if id % 10 == 0 {
+            let mut future = records.last().unwrap().clone();
+            future.assertion_time = 20;
+            future.vector.fill(0.0);
+            future.vector[1] = 1.0;
+            source.get_mut(&id).unwrap().push(future.clone());
+            records.push(future);
+        }
     }
     let mut index = HybridIndex::open(
         directory.path(),
@@ -376,8 +387,77 @@ fn committed_fused_corruption_is_reported_without_truncation() {
     assert_eq!(std::fs::metadata(path).unwrap().len(), original_length);
 }
 
+#[test]
+fn post_rename_error_poisoned_handle_preserves_new_generation() {
+    let directory = tempdir().unwrap();
+    {
+        let mut index = HybridIndex::open(
+            directory.path(),
+            4,
+            DistanceMetric::Cosine,
+            HnswConfig::default(),
+        )
+        .unwrap();
+        index
+            .insert(1, vec![record(1, vec![1.0, 0.0, 0.0, 0.0], Vec::new())])
+            .unwrap();
+        assert!(index
+            .insert_with_fault(
+                2,
+                vec![record(2, vec![0.0, 1.0, 0.0, 0.0], Vec::new())],
+                HybridFaultPoint::AfterManifestRename,
+            )
+            .is_err());
+        assert!(index
+            .insert(3, vec![record(3, vec![0.0, 0.0, 1.0, 0.0], Vec::new())])
+            .is_err());
+        assert!(index
+            .nearest(&[1.0, 0.0, 0.0, 0.0], 1, 5, u64::MAX)
+            .is_err());
+    }
+    let reopened = HybridIndex::open(
+        directory.path(),
+        4,
+        DistanceMetric::Cosine,
+        HnswConfig::default(),
+    )
+    .unwrap();
+    assert_eq!(reopened.len(), 2);
+}
+
+#[test]
+fn extreme_finite_vectors_produce_recoverable_metadata() {
+    let directory = tempdir().unwrap();
+    {
+        let mut index = HybridIndex::open(
+            directory.path(),
+            4,
+            DistanceMetric::L2,
+            HnswConfig::default(),
+        )
+        .unwrap();
+        index
+            .insert(
+                1,
+                vec![
+                    record(1, vec![f32::MAX; 4], Vec::new()),
+                    record(2, vec![f32::MIN, f32::MAX, f32::MIN, f32::MAX], Vec::new()),
+                ],
+            )
+            .unwrap();
+    }
+    let reopened = HybridIndex::open(
+        directory.path(),
+        4,
+        DistanceMetric::L2,
+        HnswConfig::default(),
+    )
+    .unwrap();
+    assert_eq!(reopened.len(), 2);
+}
+
 fn brute_force(
-    records: &HashMap<u64, HybridRecord>,
+    records: &HashMap<u64, Vec<HybridRecord>>,
     root: u64,
     query: &[f32],
     max_hops: usize,
@@ -392,11 +472,15 @@ fn brute_force(
         if depth > max_hops || !visited.insert(id) {
             continue;
         }
-        let item = &records[&id];
-        if item.assertion_time <= asserted_before
-            && item.valid_from <= valid_at
-            && valid_at < item.valid_to
-        {
+        let item = records[&id]
+            .iter()
+            .filter(|item| {
+                item.assertion_time <= asserted_before
+                    && item.valid_from <= valid_at
+                    && valid_at < item.valid_to
+            })
+            .max_by_key(|item| item.assertion_time);
+        if let Some(item) = item {
             if 1.0 - cosine_distance(query, &item.vector) >= threshold {
                 hits.insert(id);
             }
