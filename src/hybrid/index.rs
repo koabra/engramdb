@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use crate::hybrid::hnsw::{BlockLocation, HnswConfig, HnswIndex};
-use crate::hybrid::layout::{FusedBlockBuilder, FusedBlockView, GraphEdge, HybridRecord};
+use crate::hybrid::layout::{FusedBlockBuilder, FusedBlockView, HybridRecord};
 use crate::hybrid::simd::{DistanceMetric, QuantizedVector};
 use crate::{AlignedBlock, DirectIo, Error, IoStats, Result, FUSED_BLOCK_SIZE};
 
@@ -46,13 +46,13 @@ pub enum HybridFaultPoint {
     AfterBlockWrites,
     AfterBlockSync,
     DuringManifestWrite,
+    AfterManifestRename,
 }
 
 struct RecordSnapshot {
     metadata: RecordMetadata,
-    vector: QuantizedVector,
-    edges: Vec<GraphEdge>,
     location: BlockLocation,
+    block: Arc<AlignedBlock<FUSED_BLOCK_SIZE>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -101,6 +101,7 @@ pub struct HybridIndex {
     versions: HashSet<VersionKey>,
     committed_length: u64,
     generation: u64,
+    poisoned: bool,
 }
 
 impl HybridIndex {
@@ -132,7 +133,8 @@ impl HybridIndex {
                 committed_length: 0,
                 generation: 0,
             };
-            write_manifest(&directory, &manifest, false)?;
+            write_manifest(&directory, &manifest, false, false)
+                .map_err(ManifestWriteError::into_error)?;
             manifest
         };
         if io.len() < manifest.committed_length {
@@ -154,6 +156,7 @@ impl HybridIndex {
             versions: HashSet::new(),
             committed_length: manifest.committed_length,
             generation: manifest.generation,
+            poisoned: false,
         };
         index.rebuild()?;
         Ok(index)
@@ -193,6 +196,9 @@ impl HybridIndex {
         records: Vec<HybridRecord>,
         fault: HybridFaultPoint,
     ) -> Result<usize> {
+        if self.poisoned {
+            return Err(Error::MetadataPoisoned);
+        }
         if records.is_empty() {
             return Ok(0);
         }
@@ -260,9 +266,20 @@ impl HybridIndex {
             &self.directory,
             &manifest,
             fault == HybridFaultPoint::DuringManifestWrite,
+            fault == HybridFaultPoint::AfterManifestRename,
         ) {
-            self.rollback_tail()?;
-            return Err(error);
+            return match error {
+                ManifestWriteError::BeforePublish(error) => {
+                    self.rollback_tail()?;
+                    Err(error)
+                }
+                ManifestWriteError::AfterPublish(error) => {
+                    self.poisoned = true;
+                    self.committed_length = new_length;
+                    self.generation = manifest.generation;
+                    Err(error)
+                }
+            };
         }
         if fault == HybridFaultPoint::DuringManifestWrite {
             self.rollback_tail()?;
@@ -283,6 +300,9 @@ impl HybridIndex {
         valid_at: i64,
         asserted_before: u64,
     ) -> Result<QueryResult> {
+        if self.poisoned {
+            return Err(Error::MetadataPoisoned);
+        }
         if query.len() != self.dimension {
             return Err(Error::Invariant(
                 "query dimension does not match hybrid index".to_owned(),
@@ -311,11 +331,24 @@ impl HybridIndex {
                 else {
                     continue;
                 };
-                let distance = query.distance(&snapshot.vector, self.metric);
+                let view = FusedBlockView::parse_cached(snapshot.block.as_slice())?;
+                let record = view.record(snapshot.location.slot as usize)?;
+                let distance = query.distance_to_parts(
+                    record.quantized_vector(),
+                    record.scale(),
+                    record.zero_point(),
+                    self.metric,
+                )?;
                 hits.push(QueryHit {
                     id: snapshot.metadata.id,
                     distance,
-                    similarity: cosine_similarity(&query, &snapshot.vector),
+                    similarity: 1.0
+                        - query.distance_to_parts(
+                            record.quantized_vector(),
+                            record.scale(),
+                            record.zero_point(),
+                            DistanceMetric::Cosine,
+                        )?,
                     depth: 0,
                     assertion_time: snapshot.metadata.assertion_time,
                     block_offset: snapshot.location.block_offset,
@@ -351,6 +384,9 @@ impl HybridIndex {
     where
         F: Fn(RecordMetadata) -> bool,
     {
+        if self.poisoned {
+            return Err(Error::MetadataPoisoned);
+        }
         if query.len() != self.dimension {
             return Err(Error::Invariant(
                 "query dimension does not match hybrid index".to_owned(),
@@ -369,7 +405,15 @@ impl HybridIndex {
             else {
                 continue;
             };
-            let similarity = cosine_similarity(&query, &snapshot.vector);
+            let view = FusedBlockView::parse_cached(snapshot.block.as_slice())?;
+            let record = view.record(snapshot.location.slot as usize)?;
+            let similarity = 1.0
+                - query.distance_to_parts(
+                    record.quantized_vector(),
+                    record.scale(),
+                    record.zero_point(),
+                    DistanceMetric::Cosine,
+                )?;
             if similarity >= minimum_similarity && predicate(snapshot.metadata) {
                 hits.push(QueryHit {
                     id,
@@ -381,7 +425,7 @@ impl HybridIndex {
                 });
             }
             if depth < max_hops {
-                for edge in snapshot.edges {
+                for edge in record.edges() {
                     pending.push_back((edge.target, depth + 1));
                 }
             }
@@ -454,9 +498,15 @@ impl HybridIndex {
         Ok(())
     }
 
-    fn rollback_tail(&self) -> Result<()> {
-        self.io.truncate(self.committed_length)?;
-        self.io.sync()
+    fn rollback_tail(&mut self) -> Result<()> {
+        let result = self
+            .io
+            .truncate(self.committed_length)
+            .and_then(|_| self.io.sync());
+        if result.is_err() {
+            self.poisoned = true;
+        }
+        result
     }
 
     fn snapshot_at(
@@ -496,13 +546,8 @@ impl HybridIndex {
                     valid_from: record.valid_from(),
                     valid_to: record.valid_to(),
                 },
-                vector: QuantizedVector::from_parts(
-                    record.quantized_vector(),
-                    record.scale(),
-                    record.zero_point(),
-                )?,
-                edges: record.edges().collect(),
                 location: *location,
+                block: Arc::clone(&block),
             });
         }
         Ok(selected)
@@ -566,7 +611,25 @@ fn read_manifest(path: &Path, dimension: usize, metric: DistanceMetric) -> Resul
     })
 }
 
-fn write_manifest(directory: &Path, manifest: &Manifest, partial: bool) -> Result<()> {
+enum ManifestWriteError {
+    BeforePublish(Error),
+    AfterPublish(Error),
+}
+
+impl ManifestWriteError {
+    fn into_error(self) -> Error {
+        match self {
+            Self::BeforePublish(error) | Self::AfterPublish(error) => error,
+        }
+    }
+}
+
+fn write_manifest(
+    directory: &Path,
+    manifest: &Manifest,
+    partial: bool,
+    fail_after_publish: bool,
+) -> std::result::Result<(), ManifestWriteError> {
     let mut bytes = [0_u8; MANIFEST_SIZE];
     bytes[..8].copy_from_slice(MANIFEST_MAGIC);
     bytes[8..10].copy_from_slice(&1_u16.to_le_bytes());
@@ -583,16 +646,29 @@ fn write_manifest(directory: &Path, manifest: &Manifest, partial: bool) -> Resul
         .create(true)
         .truncate(true)
         .write(true)
-        .open(&temporary)?;
+        .open(&temporary)
+        .map_err(|error| ManifestWriteError::BeforePublish(Error::Io(error)))?;
     if partial {
-        file.write_all(&bytes[..MANIFEST_SIZE / 2])?;
-        file.sync_all()?;
+        file.write_all(&bytes[..MANIFEST_SIZE / 2])
+            .map_err(|error| ManifestWriteError::BeforePublish(Error::Io(error)))?;
+        file.sync_all()
+            .map_err(|error| ManifestWriteError::BeforePublish(Error::Io(error)))?;
         return Ok(());
     }
-    file.write_all(&bytes)?;
-    file.sync_all()?;
-    std::fs::rename(&temporary, &destination)?;
-    File::open(directory)?.sync_all()?;
+    file.write_all(&bytes)
+        .map_err(|error| ManifestWriteError::BeforePublish(Error::Io(error)))?;
+    file.sync_all()
+        .map_err(|error| ManifestWriteError::BeforePublish(Error::Io(error)))?;
+    std::fs::rename(&temporary, &destination)
+        .map_err(|error| ManifestWriteError::BeforePublish(Error::Io(error)))?;
+    if fail_after_publish {
+        return Err(ManifestWriteError::AfterPublish(Error::InjectedFault(
+            "after fused manifest rename",
+        )));
+    }
+    File::open(directory)
+        .and_then(|directory| directory.sync_all())
+        .map_err(|error| ManifestWriteError::AfterPublish(Error::Io(error)))?;
     Ok(())
 }
 
@@ -618,8 +694,4 @@ fn acquire_lock(directory: &Path) -> Result<File> {
 
 fn index_key(offset: u64, slot: usize) -> u64 {
     (offset / FUSED_BLOCK_SIZE as u64) << 16 | slot as u64
-}
-
-fn cosine_similarity(left: &QuantizedVector, right: &QuantizedVector) -> f32 {
-    1.0 - left.distance(right, DistanceMetric::Cosine)
 }

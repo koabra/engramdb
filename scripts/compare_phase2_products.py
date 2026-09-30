@@ -22,6 +22,14 @@ def vector_for(node_id: int, dimension: int) -> list[float]:
     return vector
 
 
+def graph_target(node_id: int, step: int, nodes: int) -> int:
+    mixed = (
+        node_id * 6_364_136_223_846_793_005
+        + step * 1_442_695_040_888_963_407
+    ) & ((1 << 64) - 1)
+    return mixed % nodes
+
+
 def arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("stack", choices=("postgresql", "neo4j-qdrant"))
@@ -80,11 +88,12 @@ async def postgresql(args: argparse.Namespace) -> list[tuple[int, float, int]]:
         await connection.execute("DROP TABLE IF EXISTS engram_phase2_nodes")
         await connection.execute(
             f"""CREATE TABLE engram_phase2_nodes(
-                id bigint PRIMARY KEY,
+                id bigint NOT NULL,
                 assertion_time bigint NOT NULL,
                 valid_from bigint NOT NULL,
                 valid_to bigint NOT NULL,
-                embedding vector({args.dimension}) NOT NULL
+                embedding vector({args.dimension}) NOT NULL,
+                PRIMARY KEY(id, assertion_time)
             )"""
         )
         await connection.execute(
@@ -98,12 +107,16 @@ async def postgresql(args: argparse.Namespace) -> list[tuple[int, float, int]]:
             [
                 (node, node % 10 + 1, str(vector_for(node, args.dimension)))
                 for node in range(args.nodes)
+            ]
+            + [
+                (node, 20, str(vector_for(node + 1, args.dimension)))
+                for node in range(0, args.nodes, 10)
             ],
         )
         await connection.executemany(
             "INSERT INTO engram_phase2_edges VALUES($1, $2, 1.0, 1)",
             [
-                (node, (node + step) % args.nodes)
+                (node, graph_target(node, step, args.nodes))
                 for node in range(args.nodes)
                 for step in range(1, 11)
             ],
@@ -111,17 +124,21 @@ async def postgresql(args: argparse.Namespace) -> list[tuple[int, float, int]]:
         await connection.execute("CREATE INDEX ON engram_phase2_edges(source)")
         rows = []
         statement = await connection.prepare(
-            """WITH RECURSIVE reachable(id, depth) AS (
+            """WITH RECURSIVE latest_nodes AS (
+                 SELECT DISTINCT ON (id) *
+                 FROM engram_phase2_nodes
+                 WHERE assertion_time <= 10
+                 ORDER BY id, assertion_time DESC
+               ), reachable(id, depth) AS (
                  SELECT $1::bigint, 0
                  UNION
                  SELECT e.target, r.depth + 1
                  FROM reachable r JOIN engram_phase2_edges e ON e.source = r.id
                  WHERE r.depth < 3
                )
-               SELECT n.id
-               FROM reachable r JOIN engram_phase2_nodes n ON n.id = r.id
-               WHERE n.assertion_time <= 10
-                 AND n.valid_from <= 500 AND 500 < n.valid_to
+               SELECT DISTINCT n.id
+               FROM reachable r JOIN latest_nodes n ON n.id = r.id
+               WHERE n.valid_from <= 500 AND 500 < n.valid_to
                  AND 1 - (n.embedding <=> $2::vector) >= 0.8"""
         )
         for query_id in range(args.queries):
@@ -153,16 +170,35 @@ def neo4j_qdrant(args: argparse.Namespace) -> list[tuple[int, float, int]]:
             size=args.dimension, distance=models.Distance.COSINE
         ),
     )
+    points = [
+        models.PointStruct(
+            id=node * 2,
+            vector=vector_for(node, args.dimension),
+            payload={
+                "logical_id": node,
+                "assertion_time": node % 10 + 1,
+                "valid_from": 0,
+                "valid_to": 1000,
+            },
+        )
+        for node in range(args.nodes)
+    ]
+    points.extend(
+        models.PointStruct(
+            id=node * 2 + 1,
+            vector=vector_for(node + 1, args.dimension),
+            payload={
+                "logical_id": node,
+                "assertion_time": 20,
+                "valid_from": 0,
+                "valid_to": 1000,
+            },
+        )
+        for node in range(0, args.nodes, 10)
+    )
     qdrant.upload_points(
         collection,
-        [
-            models.PointStruct(
-                id=node,
-                vector=vector_for(node, args.dimension),
-                payload={"assertion_time": node % 10 + 1, "valid_from": 0, "valid_to": 1000},
-            )
-            for node in range(args.nodes)
-        ],
+        points,
     )
     with graph.session() as session:
         session.run("MATCH (n:EngramPhase2) DETACH DELETE n").consume()
@@ -170,13 +206,19 @@ def neo4j_qdrant(args: argparse.Namespace) -> list[tuple[int, float, int]]:
             "UNWIND range(0, $last) AS id CREATE (:EngramPhase2 {id:id})",
             last=args.nodes - 1,
         ).consume()
-        session.run(
-            """MATCH (n:EngramPhase2)
-               UNWIND range(1,10) AS step
-               MATCH (m:EngramPhase2 {id:(n.id + step) % $nodes})
-               CREATE (n)-[:LINK {weight:1.0, edge_type:1}]->(m)""",
-            nodes=args.nodes,
-        ).consume()
+        edges = [
+            {"source": node, "target": graph_target(node, step, args.nodes)}
+            for node in range(args.nodes)
+            for step in range(1, 11)
+        ]
+        for start in range(0, len(edges), 10_000):
+            session.run(
+                """UNWIND $edges AS edge
+                   MATCH (n:EngramPhase2 {id:edge.source})
+                   MATCH (m:EngramPhase2 {id:edge.target})
+                   CREATE (n)-[:LINK {weight:1.0, edge_type:1}]->(m)""",
+                edges=edges[start : start + 10_000],
+            ).consume()
     rows = []
     try:
         with graph.session() as session:
@@ -202,7 +244,13 @@ def neo4j_qdrant(args: argparse.Namespace) -> list[tuple[int, float, int]]:
                     score_threshold=0.8,
                     limit=args.nodes,
                 ).points
-                candidates = [point.id for point in semantic]
+                candidates = list(
+                    {
+                        point.payload["logical_id"]
+                        for point in semantic
+                        if point.payload is not None
+                    }
+                )
                 result = session.run(
                     """MATCH (root:EngramPhase2 {id:$root})
                        MATCH (root)-[:LINK*0..3]->(candidate:EngramPhase2)

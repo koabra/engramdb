@@ -308,7 +308,15 @@ fn profile_split(_arguments: &[String]) -> Result<(), Box<dyn std::error::Error>
     let records = synthetic_records(10_000, dimension, 10);
     let by_id = records
         .into_iter()
-        .map(|record| (record.id, Box::new(record)))
+        .map(|record| {
+            (
+                record.id,
+                Box::new(SplitProfileRecord {
+                    vector: quantize_profile(&record.vector),
+                    edges: record.edges,
+                }),
+            )
+        })
         .collect::<std::collections::HashMap<_, _>>();
     profile_split_queries(&by_id, dimension);
     Ok(())
@@ -316,22 +324,22 @@ fn profile_split(_arguments: &[String]) -> Result<(), Box<dyn std::error::Error>
 
 #[inline(never)]
 fn profile_split_queries(
-    by_id: &std::collections::HashMap<u64, Box<HybridRecord>>,
+    by_id: &std::collections::HashMap<u64, Box<SplitProfileRecord>>,
     dimension: usize,
 ) {
     for query_id in 0..100 {
         let root = (query_id * 37 % 10_000) as u64;
-        let mut query = vec![0.0; dimension];
-        query[root as usize % 32] = 1.0;
+        let mut query = vec![0_i8; dimension];
+        query[root as usize % 32] = 127;
         let mut pending = std::collections::VecDeque::from([(root, 0)]);
         let mut visited = HashSet::new();
-        let mut score = 0.0_f32;
+        let mut score = 0_i64;
         while let Some((id, depth)) = pending.pop_front() {
             if depth > 3 || !visited.insert(id) {
                 continue;
             }
             let record = &by_id[&id];
-            score += 1.0 - cosine_distance(&query, &record.vector);
+            score += dot_i8(&query, &record.vector);
             if depth < 3 {
                 for edge in &record.edges {
                     pending.push_back((edge.target, depth + 1));
@@ -340,6 +348,28 @@ fn profile_split_queries(
         }
         black_box(score);
     }
+}
+
+struct SplitProfileRecord {
+    vector: Vec<i8>,
+    edges: Vec<GraphEdge>,
+}
+
+fn quantize_profile(vector: &[f32]) -> Vec<i8> {
+    let (minimum, maximum) = vector.iter().fold(
+        (f32::INFINITY, f32::NEG_INFINITY),
+        |(minimum, maximum), value| (minimum.min(*value), maximum.max(*value)),
+    );
+    let scale = if maximum == minimum {
+        1.0
+    } else {
+        (maximum - minimum) / 254.0
+    };
+    let zero = (maximum + minimum) * 0.5;
+    vector
+        .iter()
+        .map(|value| ((value - zero) / scale).round().clamp(-127.0, 127.0) as i8)
+        .collect()
 }
 
 fn synthetic_records(nodes: usize, dimension: usize, edges: usize) -> Vec<HybridRecord> {
@@ -447,13 +477,6 @@ fn exact_l2(base: &[Vec<f32>], query: &[f32], count: usize) -> HashSet<u64> {
         .take(count)
         .map(|entry| entry.0)
         .collect()
-}
-
-fn cosine_distance(left: &[f32], right: &[f32]) -> f32 {
-    let dot = left.iter().zip(right).map(|(a, b)| a * b).sum::<f32>();
-    let left_norm = left.iter().map(|value| value * value).sum::<f32>().sqrt();
-    let right_norm = right.iter().map(|value| value * value).sum::<f32>().sqrt();
-    1.0 - dot / (left_norm * right_norm)
 }
 
 fn option(arguments: &[String], name: &str) -> Option<String> {

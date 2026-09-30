@@ -33,15 +33,26 @@ impl QuantizedVector {
             (f32::INFINITY, f32::NEG_INFINITY),
             |(minimum, maximum), value| (minimum.min(*value), maximum.max(*value)),
         );
-        let scale = if maximum == minimum {
-            1.0
+        let (scale, zero_point) = if maximum == minimum {
+            (1.0_f32, maximum)
         } else {
-            (maximum - minimum) / 254.0
+            (
+                ((maximum as f64 - minimum as f64) / 254.0) as f32,
+                ((maximum as f64 + minimum as f64) * 0.5) as f32,
+            )
         };
-        let zero_point = (maximum + minimum) * 0.5;
+        if !scale.is_finite() || scale <= 0.0 || !zero_point.is_finite() {
+            return Err(Error::Invariant(
+                "vector range cannot be represented by finite INT8 metadata".to_owned(),
+            ));
+        }
         let values = vector
             .iter()
-            .map(|value| ((value - zero_point) / scale).round().clamp(-127.0, 127.0) as i8)
+            .map(|value| {
+                ((*value as f64 - zero_point as f64) / scale as f64)
+                    .round()
+                    .clamp(-127.0, 127.0) as i8
+            })
             .collect::<Vec<_>>();
         let norm_sq = values
             .iter()
@@ -79,21 +90,64 @@ impl QuantizedVector {
 
     pub fn distance(&self, other: &Self, metric: DistanceMetric) -> f32 {
         debug_assert_eq!(self.values.len(), other.values.len());
-        let dot = dot_i8(&self.values, &other.values) as f64;
+        self.distance_components(
+            &other.values,
+            other.scale,
+            other.zero_point,
+            other.norm_sq,
+            other.sum,
+            metric,
+        )
+    }
+
+    pub fn distance_to_parts(
+        &self,
+        values: &[i8],
+        scale: f32,
+        zero_point: f32,
+        metric: DistanceMetric,
+    ) -> Result<f32> {
+        if values.len() != self.values.len()
+            || !scale.is_finite()
+            || scale <= 0.0
+            || !zero_point.is_finite()
+        {
+            return Err(Error::Invariant(
+                "invalid direct-block quantized vector".to_owned(),
+            ));
+        }
+        let norm_sq = values
+            .iter()
+            .map(|value| i64::from(*value) * i64::from(*value))
+            .sum();
+        let sum = values.iter().map(|value| i64::from(*value)).sum();
+        Ok(self.distance_components(values, scale, zero_point, norm_sq, sum, metric))
+    }
+
+    fn distance_components(
+        &self,
+        other_values: &[i8],
+        other_scale: f32,
+        other_zero_point: f32,
+        other_norm_sq: i64,
+        other_sum: i64,
+        metric: DistanceMetric,
+    ) -> f32 {
+        let dot = dot_i8(&self.values, other_values) as f64;
         let dimension = self.values.len() as f64;
         let left_scale = self.scale as f64;
-        let right_scale = other.scale as f64;
+        let right_scale = other_scale as f64;
         let left_zero = self.zero_point as f64;
-        let right_zero = other.zero_point as f64;
+        let right_zero = other_zero_point as f64;
         let dequantized_dot = left_scale * right_scale * dot
             + left_scale * right_zero * self.sum as f64
-            + right_scale * left_zero * other.sum as f64
+            + right_scale * left_zero * other_sum as f64
             + dimension * left_zero * right_zero;
         let left_norm = left_scale * left_scale * self.norm_sq as f64
             + 2.0 * left_scale * left_zero * self.sum as f64
             + dimension * left_zero * left_zero;
-        let right_norm = right_scale * right_scale * other.norm_sq as f64
-            + 2.0 * right_scale * right_zero * other.sum as f64
+        let right_norm = right_scale * right_scale * other_norm_sq as f64
+            + 2.0 * right_scale * right_zero * other_sum as f64
             + dimension * right_zero * right_zero;
         match metric {
             DistanceMetric::Cosine => {
