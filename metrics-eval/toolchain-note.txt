@@ -1,0 +1,5 @@
+repo_rust_toolchain_toml=1.98.1
+eval_toolchain=1.89.0
+reason=clippy -D warnings fails on 1.98.1 (manual_is_multiple_of, chunks_exact_to_as_chunks); passes on MSRV 1.89.0 without code changes
+rustc 1.89.0 (29483883e 2025-08-04)
+clippy 0.1.89 (29483883ee 2025-08-04)

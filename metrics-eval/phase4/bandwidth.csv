@@ -1,0 +1,3 @@
+operation,backend,hardware_verified,bytes,iterations,elapsed_s,gb_per_s,cpu_s,cpu_pct,cache_hash
+write,cpu-direct,false,134217728,3,0.622240,0.647102,0.584210,93.888,a09ee8b260ed279dd5e99f0cc57e104f4607f95763b7b6224b1326ad1ca37f3a
+read,cpu-direct,false,134217728,3,0.548949,0.733499,0.517211,94.218,a09ee8b260ed279dd5e99f0cc57e104f4607f95763b7b6224b1326ad1ca37f3a

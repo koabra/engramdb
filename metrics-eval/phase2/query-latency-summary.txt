@@ -1,0 +1,7 @@
+samples=10000
+p50_us=2.149
+p99_us=2.604
+nodes=2000
+dimensions=128
+hops=3
+minimum_cosine=0.8

@@ -1,0 +1,124 @@
+{
+  "host": {
+    "gpu": "NVIDIA RTX 2000 Ada Generation Laptop GPU",
+    "vram_mib": 8188,
+    "driver": "595.91.07",
+    "cuda_runtime_api": "pass",
+    "pcie": "gen4 x8",
+    "cpu": "13th Gen Intel Core i9-13900H",
+    "ram_gib": 30,
+    "nvme": "SKHynix_HFS001TEJ9X162N",
+    "nvidia_fs": false,
+    "gdsio": false,
+    "libcufile_user_local_open": true
+  },
+  "toolchain": {
+    "repo_pin": "1.98.1",
+    "eval_used": "1.89.0",
+    "reason": "clippy -D warnings fails on 1.98.1"
+  },
+  "gates": {
+    "phase1": "PASS",
+    "phase2_sift_recall": "PASS",
+    "phase3": "PASS",
+    "phase4_cpu": "PASS",
+    "phase4_gds_verified": "FAIL/unavailable"
+  },
+  "phase1": {
+    "branch_latency_us": {
+      "1": { "p50_us": 512.748, "p95_us": 512.748, "batch_us": 642.251 },
+      "10": { "p50_us": 3393.767, "p95_us": 4967.798, "batch_us": 6481.654 },
+      "100": { "p50_us": 26350.39, "p95_us": 49224.231, "batch_us": 54898.702 },
+      "1000": { "p50_us": 255458.506, "p95_us": 482007.246, "batch_us": 528026.884 }
+    },
+    "write": {
+      "product": "engramdb",
+      "operation": "micro_write",
+      "logical_workers": "5000",
+      "physical_threads": "20",
+      "writes": "5000",
+      "record_bytes": "1024",
+      "elapsed_s": "7.427976",
+      "ops_per_s": "673.131",
+      "logical_bytes": "5120000",
+      "physical_bytes": "21030000",
+      "write_amplification": "4.107422",
+      "io_page_bytes": "20484096"
+    }
+  },
+  "phase2": {
+    "mean_recall_at_10": 0.981,
+    "min_recall": 0.9,
+    "search_p50_ms": 23.1938655,
+    "search_p99_ms": 32.389731,
+    "trimodal_p50_us": 2.149,
+    "ten_million_nodes": {
+      "product": "engramdb",
+      "nodes": "10000000",
+      "dimensions": "768",
+      "edges": "10",
+      "blocks": "192308",
+      "source_bytes": "35200000000",
+      "encoded_bytes": "12480000000",
+      "physical_bytes": "12603097088",
+      "physical_vs_source": "0.358043",
+      "packing_amplification": "1.009864",
+      "elapsed_s": "74.227647",
+      "measured": "true"
+    }
+  },
+  "phase3": {
+    "planner_plans_per_s": {
+      "graph_first": 914307.616,
+      "vector_first": 965222.978
+    },
+    "ingestion": {
+      "documents": 5000,
+      "arrow_bytes": 2720000,
+      "client_cpu_s": 0.005484,
+      "wall_s": 1.174941
+    },
+    "flight_query_p50_us": 400.9165
+  },
+  "phase4": {
+    "capability": {
+      "linux": true,
+      "nvidia_driver": true,
+      "nvidia_fs": false,
+      "cuda_visible": true,
+      "libcufile_path": null,
+      "cufile_driver_opened": false,
+      "gdsio_path": null,
+      "transfer_path": "CpuDirect"
+    },
+    "capability_gds_build": {
+      "linux": true,
+      "nvidia_driver": true,
+      "nvidia_fs": false,
+      "cuda_visible": true,
+      "libcufile_path": "libcufile.so.0",
+      "cufile_driver_opened": true,
+      "gdsio_path": null,
+      "transfer_path": "CpuDirect"
+    },
+    "bandwidth_gb_per_s": {
+      "write_cpu_direct": 0.647102,
+      "read_cpu_direct": 0.733499
+    },
+    "ttft_restore_ms": {
+      "tokens_1000": 5.724896,
+      "tokens_10000": 58.625686
+    },
+    "hardware_validation": [
+      "gds_direct_verified=false",
+      "transfer_path=CpuDirect",
+      "gdsio_available=false",
+      "gds_bandwidth=not measured; CPU direct-I/O fallback only"
+    ]
+  },
+  "recovery": {
+    "original_laptop_commit": "6c7700c",
+    "original_pushed": false,
+    "note": "Full raw CSV/SVG corpus not available after workspace migration; report and summaries restored from the evaluation run."
+  }
+}
