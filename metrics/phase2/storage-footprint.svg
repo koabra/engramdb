@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="800" height="420" viewBox="0 0 800 420">
+<rect width="100%" height="100%" fill="white"/>
+<style>text{font-family:system-ui,sans-serif;fill:#111827}.grid{stroke:#e5e7eb}</style>
+<text x="400.0" y="34" text-anchor="middle" font-size="20" font-weight="600">Fused-block storage footprint</text>
+
+<text x="110" y="110" font-size="14">Measured sample (100,000 nodes)</text>
+<text x="110" y="155" font-size="34" font-weight="600">0.091 GiB</text>
+<text x="110" y="230" font-size="14">Linear 10M-node projection</text>
+<text x="110" y="275" font-size="34" font-weight="600">9.11 GiB</text>
+<text x="110" y="335" font-size="13">978.5 bytes/node · 768d · 10 edges</text>
+</svg>

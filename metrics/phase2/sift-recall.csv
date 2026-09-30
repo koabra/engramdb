@@ -1,0 +1,2 @@
+dataset,base_vectors,queries,dimension,build_s,query_s,recall_at_10,simd,disk_bytes,truth
+SIFT1M,1000000,10000,128,408.194390,466.814033,0.969640,Avx512,172490752,published
