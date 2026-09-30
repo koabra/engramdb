@@ -1,4 +1,7 @@
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::fs::{File, OpenOptions};
+use std::io::{Read, Write};
+use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -37,6 +40,14 @@ pub struct QueryResult {
     pub stats: QueryStats,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HybridFaultPoint {
+    None,
+    AfterBlockWrites,
+    AfterBlockSync,
+    DuringManifestWrite,
+}
+
 struct RecordSnapshot {
     metadata: RecordMetadata,
     vector: QuantizedVector,
@@ -73,11 +84,14 @@ impl<'a> QueryContext<'a> {
 
 pub struct HybridIndex {
     directory: PathBuf,
+    _directory_lock: File,
     io: Arc<DirectIo<FUSED_BLOCK_SIZE>>,
     dimension: usize,
     metric: DistanceMetric,
     hnsw: HnswIndex,
     locations: HashMap<u64, Vec<BlockLocation>>,
+    committed_length: u64,
+    generation: u64,
 }
 
 impl HybridIndex {
@@ -94,17 +108,42 @@ impl HybridIndex {
         }
         let directory = directory.as_ref().to_path_buf();
         std::fs::create_dir_all(&directory)?;
+        let directory_lock = acquire_lock(&directory)?;
         let io = Arc::new(DirectIo::<FUSED_BLOCK_SIZE>::open(
             directory.join("fused.blocks"),
             128,
         )?);
+        let manifest_path = directory.join("fused.manifest");
+        let manifest = if manifest_path.exists() {
+            read_manifest(&manifest_path, dimension, metric)?
+        } else {
+            let manifest = Manifest {
+                dimension,
+                metric,
+                committed_length: 0,
+                generation: 0,
+            };
+            write_manifest(&directory, &manifest, false)?;
+            manifest
+        };
+        if io.len() < manifest.committed_length {
+            return Err(Error::Invariant(
+                "fused-block file is shorter than committed manifest".to_owned(),
+            ));
+        }
+        if io.len() > manifest.committed_length {
+            io.truncate(manifest.committed_length)?;
+        }
         let mut index = Self {
             directory,
+            _directory_lock: directory_lock,
             io,
             dimension,
             metric,
             hnsw: HnswIndex::new(metric, config)?,
             locations: HashMap::new(),
+            committed_length: manifest.committed_length,
+            generation: manifest.generation,
         };
         index.rebuild()?;
         Ok(index)
@@ -127,7 +166,7 @@ impl HybridIndex {
     }
 
     pub fn disk_bytes(&self) -> u64 {
-        self.io.len()
+        self.committed_length
     }
 
     pub fn io_stats(&self) -> IoStats {
@@ -135,6 +174,15 @@ impl HybridIndex {
     }
 
     pub fn insert(&mut self, epoch: u64, records: Vec<HybridRecord>) -> Result<usize> {
+        self.insert_with_fault(epoch, records, HybridFaultPoint::None)
+    }
+
+    pub fn insert_with_fault(
+        &mut self,
+        epoch: u64,
+        records: Vec<HybridRecord>,
+        fault: HybridFaultPoint,
+    ) -> Result<usize> {
         if records.is_empty() {
             return Ok(0);
         }
@@ -160,7 +208,30 @@ impl HybridIndex {
             let offset = self.io.append(&block)?;
             appended.push((offset, block));
         }
+        if fault == HybridFaultPoint::AfterBlockWrites {
+            return Err(Error::InjectedFault("after fused-block writes"));
+        }
         self.io.sync()?;
+        if fault == HybridFaultPoint::AfterBlockSync {
+            return Err(Error::InjectedFault("after fused-block sync"));
+        }
+        let new_length = self.io.len();
+        let manifest = Manifest {
+            dimension: self.dimension,
+            metric: self.metric,
+            committed_length: new_length,
+            generation: self.generation + 1,
+        };
+        write_manifest(
+            &self.directory,
+            &manifest,
+            fault == HybridFaultPoint::DuringManifestWrite,
+        )?;
+        if fault == HybridFaultPoint::DuringManifestWrite {
+            return Err(Error::InjectedFault("during fused manifest write"));
+        }
+        self.committed_length = new_length;
+        self.generation = manifest.generation;
         for (offset, block) in &appended {
             self.register_block(*offset, block.as_slice())?;
         }
@@ -369,6 +440,113 @@ impl HybridIndex {
         }
         Ok(selected)
     }
+}
+
+const MANIFEST_MAGIC: &[u8; 8] = b"ENGHYB02";
+const MANIFEST_SIZE: usize = 64;
+
+#[derive(Clone, Copy)]
+struct Manifest {
+    dimension: usize,
+    metric: DistanceMetric,
+    committed_length: u64,
+    generation: u64,
+}
+
+fn metric_tag(metric: DistanceMetric) -> u8 {
+    match metric {
+        DistanceMetric::Cosine => 1,
+        DistanceMetric::L2 => 2,
+    }
+}
+
+fn read_manifest(path: &Path, dimension: usize, metric: DistanceMetric) -> Result<Manifest> {
+    let mut bytes = [0_u8; MANIFEST_SIZE];
+    let mut file = File::open(path)?;
+    file.read_exact(&mut bytes)?;
+    if file.metadata()?.len() != MANIFEST_SIZE as u64 || &bytes[..8] != MANIFEST_MAGIC {
+        return Err(Error::Invariant(
+            "invalid fused manifest size or magic".to_owned(),
+        ));
+    }
+    let expected_crc = u32::from_le_bytes(bytes[32..36].try_into().unwrap());
+    bytes[32..36].fill(0);
+    if crc32fast::hash(&bytes) != expected_crc {
+        return Err(Error::Invariant("fused manifest CRC32 mismatch".to_owned()));
+    }
+    let stored_dimension = u32::from_le_bytes(bytes[12..16].try_into().unwrap()) as usize;
+    let stored_metric = match bytes[10] {
+        1 => DistanceMetric::Cosine,
+        2 => DistanceMetric::L2,
+        _ => return Err(Error::Invariant("invalid fused manifest metric".to_owned())),
+    };
+    if stored_dimension != dimension || stored_metric != metric {
+        return Err(Error::Invariant(
+            "fused manifest configuration does not match requested index".to_owned(),
+        ));
+    }
+    let committed_length = u64::from_le_bytes(bytes[16..24].try_into().unwrap());
+    if !committed_length.is_multiple_of(FUSED_BLOCK_SIZE as u64) {
+        return Err(Error::Invariant(
+            "fused manifest watermark is not block aligned".to_owned(),
+        ));
+    }
+    Ok(Manifest {
+        dimension,
+        metric,
+        committed_length,
+        generation: u64::from_le_bytes(bytes[24..32].try_into().unwrap()),
+    })
+}
+
+fn write_manifest(directory: &Path, manifest: &Manifest, partial: bool) -> Result<()> {
+    let mut bytes = [0_u8; MANIFEST_SIZE];
+    bytes[..8].copy_from_slice(MANIFEST_MAGIC);
+    bytes[8..10].copy_from_slice(&1_u16.to_le_bytes());
+    bytes[10] = metric_tag(manifest.metric);
+    bytes[12..16].copy_from_slice(&(manifest.dimension as u32).to_le_bytes());
+    bytes[16..24].copy_from_slice(&manifest.committed_length.to_le_bytes());
+    bytes[24..32].copy_from_slice(&manifest.generation.to_le_bytes());
+    let crc = crc32fast::hash(&bytes);
+    bytes[32..36].copy_from_slice(&crc.to_le_bytes());
+
+    let temporary = directory.join("fused.manifest.tmp");
+    let destination = directory.join("fused.manifest");
+    let mut file = OpenOptions::new()
+        .create(true)
+        .truncate(true)
+        .write(true)
+        .open(&temporary)?;
+    if partial {
+        file.write_all(&bytes[..MANIFEST_SIZE / 2])?;
+        file.sync_all()?;
+        return Ok(());
+    }
+    file.write_all(&bytes)?;
+    file.sync_all()?;
+    std::fs::rename(&temporary, &destination)?;
+    File::open(directory)?.sync_all()?;
+    Ok(())
+}
+
+fn acquire_lock(directory: &Path) -> Result<File> {
+    let path = directory.join("hybrid.lock");
+    let file = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(&path)?;
+    // SAFETY: the descriptor remains owned by HybridIndex for the lock lifetime.
+    let result = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+    if result != 0 {
+        let error = std::io::Error::last_os_error();
+        if error.kind() == std::io::ErrorKind::WouldBlock {
+            return Err(Error::DatabaseLocked(path.display().to_string()));
+        }
+        return Err(Error::Io(error));
+    }
+    Ok(file)
 }
 
 fn index_key(offset: u64, slot: usize) -> u64 {
