@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 import pyarrow as pa
 import pyarrow.flight as flight
 
@@ -41,6 +43,35 @@ class EngramClient:
         writer, _ = self._client.do_put(descriptor, table.schema)
         writer.write_table(table)
         writer.done_writing()
+
+    def hardware_capabilities(self) -> dict:
+        return json.loads(self._action("HardwareCapabilities"))
+
+    def put_kv_cache(self, cache: bytes | bytearray | memoryview, spec: dict, session_id: str) -> None:
+        table = pa.table(
+            {
+                "cache": pa.array([bytes(cache)], type=pa.binary()),
+                "spec_json": pa.array([json.dumps(spec)], type=pa.string()),
+            }
+        )
+        descriptor = flight.FlightDescriptor.for_path("kv-cache", session_id)
+        writer, _ = self._client.do_put(descriptor, table.schema)
+        writer.write_table(table)
+        writer.done_writing()
+
+    def get_kv_cache(self, session_id: str) -> tuple[pa.Buffer, dict]:
+        table = self._client.do_get(
+            flight.Ticket(f"KV\n{session_id}".encode("utf-8"))
+        ).read_all()
+        if table.num_rows != 1:
+            raise RuntimeError(f"GetKVCache returned {table.num_rows} rows")
+        return table["cache"][0].as_buffer(), json.loads(table["spec_json"][0].as_py())
+
+    def get_kv_cache_manifest(self, session_id: str) -> dict:
+        return json.loads(self._action("GetKVCacheManifest", session_id))
+
+    def get_kv_cache_ticket(self, session_id: str) -> dict:
+        return json.loads(self._action("GetKVCacheTicket", session_id))
 
     def query_pandas(self, query: str, session_id: str):
         return self.query(query, session_id).to_pandas()

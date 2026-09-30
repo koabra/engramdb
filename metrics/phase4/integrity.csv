@@ -1,0 +1,6 @@
+tier,passed,hardware
+T0-byte-roundtrip,True,False
+T1-software-attention,True,False
+adapter-vllm-sglang,True,False
+T2-vllm-runtime,False,False
+T3-gpu-gds,False,True

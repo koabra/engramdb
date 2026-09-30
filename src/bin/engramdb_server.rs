@@ -3,7 +3,7 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use engramdb::{serve_flight, Engine, SessionManager};
+use engramdb::{serve_flight, Engine, InferenceManager, KvCacheStore, SessionManager};
 
 #[tokio::main]
 async fn main() {
@@ -21,9 +21,11 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let address: SocketAddr = option(&arguments, "--address")
         .unwrap_or_else(|| "127.0.0.1:50051".to_owned())
         .parse()?;
-    let engine = Arc::new(Engine::open(data_dir)?);
+    let engine = Arc::new(Engine::open(&data_dir)?);
+    let kv_store = Arc::new(KvCacheStore::open(&data_dir)?);
+    let inference = Arc::new(InferenceManager::new(Arc::clone(&engine), kv_store));
     let main = engine.main_branch().id;
-    let sessions = Arc::new(SessionManager::new(engine));
+    let sessions = Arc::new(SessionManager::new_with_inference(engine, inference));
     println!("EngramDB Flight listening on {address}; main_branch={main}");
     serve_flight(address, sessions).await?;
     Ok(())

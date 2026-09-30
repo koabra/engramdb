@@ -1,0 +1,4 @@
+gds_direct_verified=false
+transfer_path=CpuDirect
+gdsio_available=false
+gds_bandwidth=not measured; CPU direct-I/O fallback only
