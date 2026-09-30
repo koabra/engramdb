@@ -1,0 +1,14 @@
+{
+  "linux": true,
+  "nvidia_driver": true,
+  "nvidia_fs": false,
+  "cuda_visible": true,
+  "libcufile_path": "libcufile.so.0",
+  "cufile_driver_opened": true,
+  "gdsio_path": null,
+  "transfer_path": "CpuDirect",
+  "notes": [
+    "libcufile symbols loaded; direct P2P was not verified by I/O stats",
+    "using 4 KiB-aligned CPU direct-I/O fallback"
+  ]
+}

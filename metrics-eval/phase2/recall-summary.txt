@@ -1,0 +1,9 @@
+dataset=SIFT1M
+queries=200
+mean_recall_at_10=0.981
+min_recall=0.9
+search_p50_ms=23.1938655
+search_p99_ms=32.389731
+ef_search=4096
+nodes=1000000
+dimensions=128

@@ -1,0 +1,3 @@
+plan,iterations,elapsed_ns,plans_per_s
+graph_first,100000,109372380,914307.616
+vector_first,100000,103603004,965222.978

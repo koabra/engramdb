@@ -1,0 +1,17 @@
+=== HOST HARDWARE INVENTORY ===
+host=eval-ThinkPad-P16v-Gen-1
+gpu=NVIDIA RTX 2000 Ada Generation Laptop GPU
+vram_mib=8188
+driver=595.91.07
+cuda_version_smi=13.2
+pcie=gen4 x8
+cpu=13th Gen Intel(R) Core(TM) i9-13900H
+logical_cpus=20
+ram_gib=30
+nvme=SKHynix_HFS001TEJ9X162N
+nvidia_driver_proc=yes
+nvidia_fs_dev=missing
+gdsio=missing
+gpu_compute_smoke=pass
+cufile_driver_open=success (user-local libcufile0 1.9.1)
+nvidia_fs=missing (no /dev/nvidia-fs; package needs root: nvidia-fs-dkms)

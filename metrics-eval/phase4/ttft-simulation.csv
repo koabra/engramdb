@@ -1,0 +1,5 @@
+mode,hardware_verified,tokens,cache_bytes,elapsed_ms,checksum
+prefill-cpu-simulation,false,1000,4096000,0.222302,1162346278
+kv-restore-cpu-direct,false,1000,4096000,5.724896,d620b6f23033a122e5d1e20facae29a0a98cefb026d8ee4e4705318d4dbc415c
+prefill-cpu-simulation,false,10000,40960000,2.183327,1190786212
+kv-restore-cpu-direct,false,10000,40960000,58.625686,3124e33e4e0b55b2c31e16800c1b480cb8fd93c58db8338db3d4372098fbffc9
