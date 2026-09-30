@@ -293,7 +293,9 @@ impl HybridIndex {
         let mut requested = if has_versions {
             self.hnsw.len()
         } else {
-            self.hnsw.len().min(count.saturating_mul(32).max(128))
+            self.hnsw
+                .len()
+                .min(self.hnsw.ef_search().max(count.saturating_mul(8)))
         };
         let mut context = QueryContext::new(&self.io);
         let (hits, visited_records) = loop {
