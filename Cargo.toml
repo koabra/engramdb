@@ -15,9 +15,11 @@ crc32fast = "1"
 futures = "0.3.34"
 io-uring = "0.7"
 libc = "0.2"
+libloading = { version = "0.8.9", optional = true }
 parking_lot = "0.12"
 prost = "0.14.4"
 serde = { version = "1", features = ["derive"] }
+serde_json = "1.0.151"
 thiserror = "2"
 tokio = { version = "1.53.1", features = ["full"] }
 tokio-stream = "0.1.19"
@@ -36,3 +38,7 @@ codegen-units = 1
 [[bin]]
 name = "phase1-bench"
 path = "src/bin/phase1_bench.rs"
+
+[features]
+default = []
+gds = ["dep:libloading"]

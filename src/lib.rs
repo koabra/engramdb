@@ -17,9 +17,12 @@ mod checkpoint;
 mod error;
 mod flight;
 mod fused;
+mod hardware;
 mod hazard;
 mod hybrid;
+mod inference;
 mod io;
+mod kv_cache;
 mod query;
 mod session;
 mod tree;
@@ -33,14 +36,22 @@ pub use fused::{
     dot_i8, simd_kernel_name, FusedBlockBuilder, FusedBlockView, FusedNode, FusedNodeView,
     GraphEdge, GraphEdgeIter, QuantizedVector, TemporalIter, TemporalPoint,
 };
+#[cfg(feature = "gds")]
+pub use hardware::GdsApi;
+pub use hardware::{CudaStream, CufileError, CufileHandle, HardwareCapabilities, TransferPath};
 pub use hazard::{HazardAtomic, HazardDomain, HazardGuard};
 pub use hybrid::{
     BlockRef, HybridIndex, HybridIndexStats, NodeProjection, SearchResult, TraversalMatch,
     TriModalQuery, VectorMetric,
 };
+pub use inference::{InferenceManager, KvRestoreTicket, KvTransferExtent};
 pub use io::{
     AlignedPage, BlockLayout, DirectIo, IoStats, FUSED_BLOCK_LAYOUT, FUSED_BLOCK_SIZE, PAGE_LAYOUT,
     PAGE_SIZE,
+};
+pub use kv_cache::{
+    KvBlockRef, KvCacheManifest, KvCacheSnapshot, KvCacheSpec, KvCacheStore, KvDType, KvLayout,
+    KV_HEADER_SIZE, KV_TRANSFER_BLOCK_SIZE,
 };
 pub use query::{
     execute, explain, optimize, parse_enql, plan_logical, AccessPath, CatalogStats, EnqlQuery,

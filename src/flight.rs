@@ -4,7 +4,10 @@ use std::net::SocketAddr;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use arrow::array::{Array, FixedSizeListArray, Float32Array, Int64Array, StringArray, UInt64Array};
+use arrow::array::{
+    Array, BinaryArray, FixedSizeListArray, Float32Array, Int64Array, StringArray, UInt64Array,
+};
+use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
 use arrow_flight::decode::FlightRecordBatchStream;
 use arrow_flight::encode::FlightDataEncoderBuilder;
@@ -19,7 +22,7 @@ use futures::{stream, Stream, StreamExt, TryStreamExt};
 use tonic::{Request, Response, Status, Streaming};
 use uuid::Uuid;
 
-use crate::{FusedNode, SessionManager, TemporalPoint};
+use crate::{FusedNode, KvCacheSnapshot, KvCacheSpec, SessionManager, TemporalPoint};
 
 type ResponseStream<T> =
     Pin<Box<dyn Stream<Item = std::result::Result<T, Status>> + Send + 'static>>;
@@ -86,11 +89,22 @@ impl FlightService for EngramFlightService {
         request: Request<Ticket>,
     ) -> std::result::Result<Response<Self::DoGetStream>, Status> {
         let ticket = request.into_inner();
-        let (session, query) = parse_session_payload(&ticket.ticket)?;
-        let batches = self
-            .sessions
-            .query_batches(session, query, 1024)
-            .map_err(invalid_status)?;
+        let payload = std::str::from_utf8(&ticket.ticket)
+            .map_err(|_| Status::invalid_argument("ticket must be UTF-8"))?;
+        let batches = if let Some(session) = payload.strip_prefix("KV\n") {
+            let session = parse_uuid(session.trim())?;
+            let snapshot = self
+                .sessions
+                .get_kv_cache(session)
+                .map_err(invalid_status)?
+                .ok_or_else(|| Status::not_found("session has no KV cache"))?;
+            vec![kv_snapshot_to_batch(&snapshot)?]
+        } else {
+            let (session, query) = parse_session_payload(&ticket.ticket)?;
+            self.sessions
+                .query_batches(session, query, 1024)
+                .map_err(invalid_status)?
+        };
         let input = stream::iter(batches.into_iter().map(Ok));
         let output = FlightDataEncoderBuilder::new()
             .build(input)
@@ -111,21 +125,50 @@ impl FlightService for EngramFlightService {
             .flight_descriptor
             .as_ref()
             .ok_or_else(|| Status::invalid_argument("first FlightData needs a descriptor"))?;
-        let session = descriptor
-            .path
+        let descriptor_path = descriptor.path.clone();
+        let kv_upload = descriptor_path
             .first()
+            .is_some_and(|part| part == "kv-cache");
+        let session_part = if kv_upload {
+            descriptor_path.get(1)
+        } else {
+            descriptor_path.first()
+        };
+        let session = session_part
             .ok_or_else(|| Status::invalid_argument("descriptor path needs a session UUID"))
             .and_then(|value| parse_uuid(value))?;
         let flight_stream =
             stream::once(async { Ok(first) }).chain(input.map_err(FlightError::from));
         let mut batches = FlightRecordBatchStream::new_from_flight_data(flight_stream);
-        let mut nodes = Vec::new();
-        while let Some(batch) = batches.next().await {
-            nodes.extend(batch_to_nodes(&batch.map_err(invalid_status)?)?);
+        if kv_upload {
+            let mut spec = None;
+            let mut bytes = Vec::new();
+            while let Some(batch) = batches.next().await {
+                let (batch_spec, batch_bytes) = batch_to_kv(&batch.map_err(invalid_status)?)?;
+                if spec.is_some_and(|existing| existing != batch_spec) {
+                    return Err(Status::invalid_argument(
+                        "KV upload batches have inconsistent specs",
+                    ));
+                }
+                spec = Some(batch_spec);
+                bytes.extend_from_slice(&batch_bytes);
+            }
+            self.sessions
+                .put_kv_cache(
+                    session,
+                    spec.ok_or_else(|| Status::invalid_argument("KV upload has no batches"))?,
+                    &bytes,
+                )
+                .map_err(invalid_status)?;
+        } else {
+            let mut nodes = Vec::new();
+            while let Some(batch) = batches.next().await {
+                nodes.extend(batch_to_nodes(&batch.map_err(invalid_status)?)?);
+            }
+            self.sessions
+                .ingest(session, nodes)
+                .map_err(invalid_status)?;
         }
-        self.sessions
-            .ingest(session, nodes)
-            .map_err(invalid_status)?;
         Ok(Response::new(Box::pin(stream::iter(vec![Ok(
             PutResult::default(),
         )]))))
@@ -145,6 +188,32 @@ impl FlightService for EngramFlightService {
         let action = request.into_inner();
         let result = match action.r#type.as_str() {
             "MainBranch" => self.sessions.engine().main_branch().id.to_string(),
+            "HardwareCapabilities" => self
+                .sessions
+                .hardware_capabilities()
+                .map_err(invalid_status)?
+                .to_json()
+                .map_err(invalid_status)?,
+            "GetKVCacheManifest" => {
+                let session = parse_uuid_bytes(&action.body)?;
+                let snapshot = self
+                    .sessions
+                    .get_kv_cache(session)
+                    .map_err(invalid_status)?
+                    .ok_or_else(|| Status::not_found("session has no KV cache"))?;
+                serde_json::to_string_pretty(&snapshot.manifest)
+                    .map_err(|error| Status::internal(error.to_string()))?
+            }
+            "GetKVCacheTicket" => {
+                let session = parse_uuid_bytes(&action.body)?;
+                let ticket = self
+                    .sessions
+                    .kv_restore_ticket(session)
+                    .map_err(invalid_status)?
+                    .ok_or_else(|| Status::not_found("session has no KV cache"))?;
+                serde_json::to_string_pretty(&ticket)
+                    .map_err(|error| Status::internal(error.to_string()))?
+            }
             "ForkSession" => {
                 let parent = parse_uuid_bytes(&action.body)?;
                 self.sessions
@@ -183,6 +252,18 @@ impl FlightService for EngramFlightService {
         Ok(Response::new(Box::pin(stream::iter(
             [
                 ("MainBranch", "Return the root branch UUID"),
+                (
+                    "HardwareCapabilities",
+                    "Return detected CUDA/GDS and fallback capabilities",
+                ),
+                (
+                    "GetKVCacheManifest",
+                    "Return the branch KV-cache manifest as JSON",
+                ),
+                (
+                    "GetKVCacheTicket",
+                    "Return aligned native transfer extents as JSON",
+                ),
                 ("ForkSession", "Fork a durable branch from a parent UUID"),
                 ("CommitSession", "Seal a speculative session"),
                 ("Explain", "Return the optimized EnQL physical plan"),
@@ -241,6 +322,36 @@ fn batch_to_nodes(batch: &RecordBatch) -> std::result::Result<Vec<FusedNode>, St
             .map_err(invalid_status)
         })
         .collect()
+}
+
+fn batch_to_kv(batch: &RecordBatch) -> std::result::Result<(KvCacheSpec, Vec<u8>), Status> {
+    if batch.num_rows() != 1 {
+        return Err(Status::invalid_argument(
+            "each KV Flight batch must contain exactly one row",
+        ));
+    }
+    let caches = column::<BinaryArray>(batch, "cache")?;
+    let specs = column::<StringArray>(batch, "spec_json")?;
+    let spec: KvCacheSpec = serde_json::from_str(specs.value(0))
+        .map_err(|error| Status::invalid_argument(format!("invalid KV spec JSON: {error}")))?;
+    Ok((spec, caches.value(0).to_vec()))
+}
+
+fn kv_snapshot_to_batch(snapshot: &KvCacheSnapshot) -> std::result::Result<RecordBatch, Status> {
+    let spec_json = serde_json::to_string(&snapshot.manifest.spec)
+        .map_err(|error| Status::internal(format!("failed to serialize KV spec: {error}")))?;
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("cache", DataType::Binary, false),
+        Field::new("spec_json", DataType::Utf8, false),
+    ]));
+    RecordBatch::try_new(
+        schema,
+        vec![
+            Arc::new(BinaryArray::from(vec![snapshot.bytes.as_slice()])),
+            Arc::new(StringArray::from(vec![spec_json])),
+        ],
+    )
+    .map_err(|error| Status::internal(error.to_string()))
 }
 
 fn column<'a, T: 'static>(
