@@ -1,10 +1,8 @@
 # EngramDB
 
-EngramDB is a Linux-only storage and hybrid-index foundation. Phase 1 provides
-durable copy-on-write branches and bitemporal records. Phase 2 adds durable
-64 KiB fused semantic/graph/temporal blocks, INT8 quantization, SIMD distance
-kernels, HNSW candidate search, and historical multi-hop traversal. A Phase 3
-query execution layer is intentionally not included.
+EngramDB Phase 2 is a Linux-only prototype that combines the Phase 1
+content-addressed storage foundation with 64 KiB fused vector, graph, and
+temporal blocks. Query execution remains reserved for Phase 3.
 
 ## Storage model
 
@@ -22,18 +20,17 @@ query execution layer is intentionally not included.
 
 ## Hybrid index
 
-- `AlignedBlock<const SIZE>` and `DirectIo<const SIZE>` preserve Phase 1's
-  4 KiB format while supporting independently aligned 64 KiB fused files.
-- Every fused block has a fixed 64-byte header, checked section offsets, CSR
-  graph edges, temporal intervals, per-vector asymmetric INT8 parameters, and
-  a header+payload CRC.
-- Runtime dispatch uses AVX-512 on supported x86-64 hosts, NEON on AArch64, and
-  a scalar fallback.
-- `HybridIndex::nearest` performs HNSW search with temporal-version selection.
-  `HybridIndex::traverse` combines semantic thresholding, valid/assertion time,
-  graph hops, and a caller predicate.
-- An atomic manifest publishes only synced fused-block generations; recovery
-  truncates unpublished tails and rejects committed corruption.
+- Phase 1 tree pages remain 4 KiB; layout-aware direct I/O also supports a
+  separate 64 KiB fused-block file without changing the Phase 1 format.
+- Each fused block tightly packs a 64-byte header, node directory, temporal
+  points, INT8 vectors, and CSR-style outbound edges. CRC32 protects the full
+  payload.
+- `HybridIndex` supports cosine or squared-L2 HNSW search and filtered,
+  multi-hop graph traversal. AVX2 and NEON kernels scan quantized vectors
+  directly from aligned block memory without constructing `Vec<f32>` values.
+- Fused blocks and content-addressed HNSW checkpoints are published atomically
+  through branch metadata. Forks share an immutable checkpoint root in O(1),
+  and recovery truncates fused/checkpoint records beyond committed watermarks.
 
 ## Minimal use
 
@@ -82,24 +79,14 @@ python scripts/compare_products.py mongodb \
 These results are kept separate from local EngramDB measurements so unavailable
 products never produce synthetic or inferred numbers.
 
-Run Phase 2 validation, including Phase 1 regressions, checksum-pinned SIFT1M,
-10,000 tri-modal queries, storage measurement, and Cachegrind:
+Run Phase 2 validation (including Phase 1 regressions):
 
 ```bash
-./scripts/validate_phase2.sh
+SIFT1M_DIR=/path/to/sift1m ./scripts/validate_phase2.sh
 ```
 
-Results are written to `metrics/phase2/` and interpreted in
-[`docs/phase2-validation.md`](docs/phase2-validation.md). The first run
-downloads approximately 525 MB of standard SIFT1M files to
-`/tmp/engramdb-sift1m`.
-
-External product comparisons require provisioned services:
-
-```bash
-python -m pip install asyncpg neo4j qdrant-client
-python scripts/compare_phase2_products.py postgresql \
-  --output metrics/phase2/postgresql-query-latency.csv
-python scripts/compare_phase2_products.py neo4j-qdrant \
-  --output metrics/phase2/neo4j-qdrant-query-latency.csv
-```
+The directory must contain `sift_base.fvecs`, `sift_query.fvecs`, and
+`sift_groundtruth.ivecs`. Without it, the script runs the same Recall@10
+pipeline on a deterministic synthetic corpus. Raw measurements and plots are
+under [`metrics/phase2/`](metrics/phase2/); interpretation and limitations are
+in [`docs/phase2-validation.md`](docs/phase2-validation.md).

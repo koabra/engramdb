@@ -1,0 +1,111 @@
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.12s
+   Compiling engramdb v0.1.0 (/workspace)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.60s
+     Running unittests src/lib.rs (target/debug/deps/engramdb-7728dd1d92377605)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/bin/phase1_bench.rs (target/debug/deps/phase1_bench-0ae059d716296931)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/bin/phase2_bench.rs (target/debug/deps/phase2_bench-c78888f088bbdca7)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/branch_properties.rs (target/debug/deps/branch_properties-6b26ccebde312ff7)
+
+running 2 tests
+test thousand_randomized_forks_and_merges ... ignored, run with scripts/validate_phase1.sh
+test random_forks_never_leak_into_parents ... ok
+
+test result: ok. 1 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 33.70s
+
+     Running tests/branching.rs (target/debug/deps/branching-6446ab7b1a5cf4b4)
+
+running 5 tests
+test stale_transactions_are_rejected ... ok
+test bitemporal_as_of_reads_return_prior_assertion ... ok
+test fork_is_constant_storage_and_isolated ... ok
+test three_way_merge_accepts_non_overlapping_ranges ... ok
+test three_way_merge_rejects_conflicting_ranges ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+     Running tests/crash_recovery.rs (target/debug/deps/crash_recovery-d3b9fe3870066931)
+
+running 9 tests
+test committed_page_corruption_is_reported ... ok
+test committed_metadata_corruption_is_reported_not_silently_rolled_back ... ok
+test corrupted_metadata_length_is_not_mistaken_for_partial_tail ... ok
+test partial_metadata_write_poisons_engine_until_reopen ... ok
+test fork_after_aborted_pages_keeps_previous_committed_watermark ... ok
+test torn_trailing_data_page_is_discarded ... ok
+test every_transaction_fault_boundary_recovers_last_committed_root ... ok
+test committed_watermark_discards_nonfinal_torn_orphan_pages ... ok
+test randomized_fault_cycles_never_publish_partial_state ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.56s
+
+     Running tests/hybrid_indexing.rs (target/debug/deps/hybrid_indexing-7159e1241919fb97)
+
+running 6 tests
+test dispatched_i8_dot_matches_scalar_oracle ... ok
+test fused_block_crc_rejects_corruption ... ok
+test packed_block_round_trips_without_materializing_vectors ... ok
+test tri_modal_traversal_matches_brute_force_oracle ... ok
+test squared_l2_metric_ranks_by_distance ... ok
+test hnsw_recall_exceeds_phase2_threshold_and_survives_reopen ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.29s
+
+     Running tests/loom_hazard.rs (target/debug/deps/loom_hazard-c4dae726867cc0bc)
+
+running 2 tests
+test hazard_atomic_survives_concurrent_replacement ... ok
+test loom_exhaustively_checks_publish_validate_reclaim_interleavings ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.93s
+
+     Running tests/storage_foundation.rs (target/debug/deps/storage_foundation-1663de003736a3b4)
+
+running 7 tests
+test direct_io_round_trip_is_aligned_and_accounted ... ok
+test clock_pool_evicts_and_reloads_pages ... ok
+test direct_io_supports_independent_64k_block_geometry ... ok
+test database_directory_has_single_engine_owner ... ok
+test identical_writes_are_content_deduplicated ... ok
+test content_addressed_tree_splits_and_recovers ... ok
+test readers_remain_consistent_during_copy_on_write_splits ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.92s
+
+   Compiling engramdb v0.1.0 (/workspace)
+    Finished `release` profile [optimized] target(s) in 14.82s
+     Running tests/branch_properties.rs (target/release/deps/branch_properties-3ec05d4994780a9c)
+
+running 1 test
+test thousand_randomized_forks_and_merges ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 16.50s
+
+   Compiling engramdb v0.1.0 (/workspace)
+    Finished `release` profile [optimized] target(s) in 6.26s
+     Running tests/hybrid_indexing.rs (target/release/deps/hybrid_indexing-2c61cb7b14832a3f)
+
+running 6 tests
+test dispatched_i8_dot_matches_scalar_oracle ... ok
+test fused_block_crc_rejects_corruption ... ok
+test packed_block_round_trips_without_materializing_vectors ... ok
+test squared_l2_metric_ranks_by_distance ... ok
+test tri_modal_traversal_matches_brute_force_oracle ... ok
+test hnsw_recall_exceeds_phase2_threshold_and_survives_reopen ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.16s
+

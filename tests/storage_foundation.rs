@@ -1,8 +1,9 @@
+use std::io::Write;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use engramdb::{
-    AlignedBlock, AlignedPage, BufferPool, DirectIo, Engine, Error, TemporalRecord,
+    AlignedPage, BufferPool, DirectIo, Engine, Error, TemporalRecord, FUSED_BLOCK_LAYOUT,
     FUSED_BLOCK_SIZE, PAGE_SIZE,
 };
 use tempfile::tempdir;
@@ -25,19 +26,31 @@ fn direct_io_round_trip_is_aligned_and_accounted() {
 }
 
 #[test]
-fn direct_io_supports_aligned_64k_blocks() {
+fn direct_io_supports_independent_64k_block_geometry() {
     let directory = tempdir().unwrap();
-    let io = DirectIo::<FUSED_BLOCK_SIZE>::open(directory.path().join("blocks"), 8).unwrap();
-    let mut block = AlignedBlock::<FUSED_BLOCK_SIZE>::zeroed();
-    assert!(block.is_aligned());
-    for (index, byte) in block.as_mut_slice().iter_mut().enumerate() {
-        *byte = (index % 251) as u8;
-    }
-    let offset = io.append(&block).unwrap();
+    let path = directory.path().join("blocks");
+    let io = DirectIo::open_with_layout(&path, 8, FUSED_BLOCK_LAYOUT).unwrap();
+    let mut block = AlignedPage::zeroed_for(FUSED_BLOCK_LAYOUT);
+    block.as_mut_slice()[..16].copy_from_slice(b"engram-fused-v1!");
+
+    assert_eq!(io.append(&block).unwrap(), 0);
+    assert_eq!(io.append(&block).unwrap(), FUSED_BLOCK_SIZE as u64);
     io.sync().unwrap();
-    assert_eq!(offset, 0);
-    assert_eq!(io.read(offset).unwrap().as_slice(), block.as_slice());
-    assert_eq!(io.stats().bytes_written, FUSED_BLOCK_SIZE as u64);
+    assert_eq!(
+        io.read(FUSED_BLOCK_SIZE as u64).unwrap().as_slice(),
+        block.as_slice()
+    );
+    assert_eq!(io.stats().bytes_written, (FUSED_BLOCK_SIZE * 2) as u64);
+
+    drop(io);
+    std::fs::OpenOptions::new()
+        .append(true)
+        .open(&path)
+        .unwrap()
+        .write_all(&[0x55; 777])
+        .unwrap();
+    let reopened = DirectIo::open_with_layout(&path, 8, FUSED_BLOCK_LAYOUT).unwrap();
+    assert_eq!(reopened.len(), (FUSED_BLOCK_SIZE * 2) as u64);
 }
 
 #[test]
