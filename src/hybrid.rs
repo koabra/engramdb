@@ -5,7 +5,10 @@ use std::collections::{BinaryHeap, HashMap, HashSet, VecDeque};
 use std::path::Path;
 use std::sync::Arc;
 
-use crate::fused::{FusedBlockBuilder, FusedBlockView, FusedNode, FusedNodeView, QuantizedVector};
+use crate::fused::{
+    FusedBlockBuilder, FusedBlockView, FusedNode, FusedNodeView, GraphEdge, QuantizedVector,
+    TemporalPoint,
+};
 use crate::io::{AlignedPage, DirectIo, FUSED_BLOCK_LAYOUT, FUSED_BLOCK_SIZE};
 use crate::tree::Hash;
 use crate::{Error, Result};
@@ -37,6 +40,15 @@ pub struct TraversalMatch {
     pub id: Hash,
     pub cosine_similarity: f32,
     pub depth: usize,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct NodeProjection {
+    pub id: Hash,
+    pub temporal: Vec<TemporalPoint>,
+    pub vector: Vec<i8>,
+    pub quantization_scale: f32,
+    pub edges: Vec<GraphEdge>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -534,6 +546,54 @@ impl HybridIndex {
         )
     }
 
+    pub fn tri_modal_query_vector_first(
+        &self,
+        start: Hash,
+        query: TriModalQuery<'_>,
+        limit: usize,
+    ) -> Result<Vec<TraversalMatch>> {
+        let reachable = self.reachable_depths(start, query.max_hops, query.edge_type)?;
+        let mut output = Vec::new();
+        for candidate in self.exact_nearest(query.vector, self.locations.len())? {
+            if candidate.score < query.minimum_cosine {
+                break;
+            }
+            let Some(depth) = reachable.get(&candidate.id).copied() else {
+                continue;
+            };
+            let index = self.by_id[&candidate.id];
+            let node = self.node(index)?;
+            if node.temporal().any(|point| {
+                point.assertion_time < query.assertion_before && point.valid_time <= query.valid_at
+            }) {
+                output.push(TraversalMatch {
+                    id: candidate.id,
+                    cosine_similarity: candidate.score,
+                    depth,
+                });
+                if output.len() == limit {
+                    break;
+                }
+            }
+        }
+        Ok(output)
+    }
+
+    pub fn projections(&self) -> Result<Vec<NodeProjection>> {
+        (0..self.locations.len())
+            .map(|index| {
+                let node = self.node(index)?;
+                Ok(NodeProjection {
+                    id: node.id(),
+                    temporal: node.temporal().collect(),
+                    vector: node.vector().to_vec(),
+                    quantization_scale: node.quantization_scale(),
+                    edges: node.edges().collect(),
+                })
+            })
+            .collect()
+    }
+
     pub fn stats(&self) -> HybridIndexStats {
         HybridIndexStats {
             nodes: self.locations.len(),
@@ -613,6 +673,38 @@ impl HybridIndex {
             .ok_or_else(|| Error::Invariant("HNSW references an unknown node".to_owned()))?;
         let block = &self.blocks[location.block];
         FusedBlockView::trusted(block.bytes.as_slice()).node(location.slot, block.offset)
+    }
+
+    fn reachable_depths(
+        &self,
+        start: Hash,
+        max_hops: usize,
+        edge_type: Option<u16>,
+    ) -> Result<HashMap<Hash, usize>> {
+        let start_index = *self
+            .by_id
+            .get(&start)
+            .ok_or_else(|| Error::Invariant(format!("unknown fused node {start}")))?;
+        let mut queue = VecDeque::from([(start_index, 0_usize)]);
+        let mut visited = HashMap::from([(start, 0_usize)]);
+        while let Some((index, depth)) = queue.pop_front() {
+            if depth == max_hops {
+                continue;
+            }
+            for edge in self.node(index)?.edges() {
+                if edge_type.is_some_and(|expected| edge.edge_type != expected) {
+                    continue;
+                }
+                let Some(target) = self.by_id.get(&edge.target).copied() else {
+                    continue;
+                };
+                if !visited.contains_key(&edge.target) {
+                    visited.insert(edge.target, depth + 1);
+                    queue.push_back((target, depth + 1));
+                }
+            }
+        }
+        Ok(visited)
     }
 
     fn rebuild_hnsw(&mut self) -> Result<()> {

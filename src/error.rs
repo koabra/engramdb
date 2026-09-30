@@ -25,6 +25,10 @@ pub enum Error {
     DimensionMismatch { expected: usize, actual: usize },
     #[error("vector must be non-empty, finite, and no larger than 65535 dimensions")]
     InvalidVector,
+    #[error("invalid EnQL query: {0}")]
+    InvalidQuery(String),
+    #[error("Arrow conversion failed: {0}")]
+    Arrow(String),
     #[error("branch {0} does not exist")]
     UnknownBranch(Uuid),
     #[error("branch {0} changed while the transaction was open")]
