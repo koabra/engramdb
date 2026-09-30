@@ -1,7 +1,10 @@
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 
-use engramdb::{AlignedPage, BufferPool, DirectIo, Engine, Error, TemporalRecord, PAGE_SIZE};
+use engramdb::{
+    AlignedBlock, AlignedPage, BufferPool, DirectIo, Engine, Error, TemporalRecord,
+    FUSED_BLOCK_SIZE, PAGE_SIZE,
+};
 use tempfile::tempdir;
 
 #[test]
@@ -19,6 +22,22 @@ fn direct_io_round_trip_is_aligned_and_accounted() {
     let stats = io.stats();
     assert_eq!(stats.bytes_written, PAGE_SIZE as u64);
     assert_eq!(stats.bytes_read, PAGE_SIZE as u64);
+}
+
+#[test]
+fn direct_io_supports_aligned_64k_blocks() {
+    let directory = tempdir().unwrap();
+    let io = DirectIo::<FUSED_BLOCK_SIZE>::open(directory.path().join("blocks"), 8).unwrap();
+    let mut block = AlignedBlock::<FUSED_BLOCK_SIZE>::zeroed();
+    assert!(block.is_aligned());
+    for (index, byte) in block.as_mut_slice().iter_mut().enumerate() {
+        *byte = (index % 251) as u8;
+    }
+    let offset = io.append(&block).unwrap();
+    io.sync().unwrap();
+    assert_eq!(offset, 0);
+    assert_eq!(io.read(offset).unwrap().as_slice(), block.as_slice());
+    assert_eq!(io.stats().bytes_written, FUSED_BLOCK_SIZE as u64);
 }
 
 #[test]

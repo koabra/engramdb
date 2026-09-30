@@ -14,20 +14,24 @@ use parking_lot::Mutex;
 use crate::{Error, Result};
 
 pub const PAGE_SIZE: usize = 4096;
-const ALIGNMENT: usize = 4096;
+pub const FUSED_BLOCK_SIZE: usize = 64 * 1024;
 
-/// A zeroed 4 KiB allocation suitable for Linux `O_DIRECT`.
-pub struct AlignedPage {
+/// A zeroed, size-aligned allocation suitable for Linux `O_DIRECT`.
+pub struct AlignedBlock<const SIZE: usize> {
     pointer: NonNull<u8>,
 }
 
 // The allocation is uniquely owned and contains no internal references.
-unsafe impl Send for AlignedPage {}
-unsafe impl Sync for AlignedPage {}
+unsafe impl<const SIZE: usize> Send for AlignedBlock<SIZE> {}
+unsafe impl<const SIZE: usize> Sync for AlignedBlock<SIZE> {}
 
-impl AlignedPage {
+impl<const SIZE: usize> AlignedBlock<SIZE> {
     pub fn zeroed() -> Self {
-        let layout = Layout::from_size_align(PAGE_SIZE, ALIGNMENT).expect("valid page layout");
+        assert!(
+            SIZE >= PAGE_SIZE && SIZE.is_power_of_two(),
+            "direct-I/O block size must be a power of two and at least 4 KiB"
+        );
+        let layout = Layout::from_size_align(SIZE, SIZE).expect("valid block layout");
         // SAFETY: the layout is non-zero and valid.
         let pointer = unsafe { alloc_zeroed(layout) };
         let pointer = NonNull::new(pointer).unwrap_or_else(|| handle_alloc_error(layout));
@@ -35,13 +39,13 @@ impl AlignedPage {
     }
 
     pub fn as_slice(&self) -> &[u8] {
-        // SAFETY: the allocation is live for PAGE_SIZE bytes.
-        unsafe { std::slice::from_raw_parts(self.pointer.as_ptr(), PAGE_SIZE) }
+        // SAFETY: the allocation is live for SIZE bytes.
+        unsafe { std::slice::from_raw_parts(self.pointer.as_ptr(), SIZE) }
     }
 
     pub fn as_mut_slice(&mut self) -> &mut [u8] {
         // SAFETY: this type uniquely owns its allocation.
-        unsafe { std::slice::from_raw_parts_mut(self.pointer.as_ptr(), PAGE_SIZE) }
+        unsafe { std::slice::from_raw_parts_mut(self.pointer.as_ptr(), SIZE) }
     }
 
     pub(crate) fn as_ptr(&self) -> *const u8 {
@@ -51,9 +55,13 @@ impl AlignedPage {
     pub(crate) fn as_mut_ptr(&mut self) -> *mut u8 {
         self.pointer.as_ptr()
     }
+
+    pub fn is_aligned(&self) -> bool {
+        self.pointer.as_ptr() as usize % SIZE == 0
+    }
 }
 
-impl Clone for AlignedPage {
+impl<const SIZE: usize> Clone for AlignedBlock<SIZE> {
     fn clone(&self) -> Self {
         let mut clone = Self::zeroed();
         clone.as_mut_slice().copy_from_slice(self.as_slice());
@@ -61,19 +69,21 @@ impl Clone for AlignedPage {
     }
 }
 
-impl Default for AlignedPage {
+impl<const SIZE: usize> Default for AlignedBlock<SIZE> {
     fn default() -> Self {
         Self::zeroed()
     }
 }
 
-impl Drop for AlignedPage {
+impl<const SIZE: usize> Drop for AlignedBlock<SIZE> {
     fn drop(&mut self) {
-        let layout = Layout::from_size_align(PAGE_SIZE, ALIGNMENT).expect("valid page layout");
+        let layout = Layout::from_size_align(SIZE, SIZE).expect("valid block layout");
         // SAFETY: pointer was allocated with this exact layout.
         unsafe { dealloc(self.pointer.as_ptr(), layout) };
     }
 }
+
+pub type AlignedPage = AlignedBlock<PAGE_SIZE>;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct IoStats {
@@ -87,7 +97,7 @@ pub struct IoStats {
 /// Serialized submission over one `io_uring`. The kernel still executes direct
 /// reads and writes asynchronously; serialization keeps completion ownership
 /// simple for the Phase 1 synchronous transaction API.
-pub struct DirectIo {
+pub struct DirectIo<const BLOCK_SIZE: usize = PAGE_SIZE> {
     path: PathBuf,
     file: File,
     ring: Mutex<IoUring>,
@@ -100,8 +110,13 @@ pub struct DirectIo {
     sync_operations: AtomicU64,
 }
 
-impl DirectIo {
+impl<const BLOCK_SIZE: usize> DirectIo<BLOCK_SIZE> {
     pub fn open(path: impl AsRef<Path>, queue_depth: u32) -> Result<Self> {
+        if BLOCK_SIZE < PAGE_SIZE || !BLOCK_SIZE.is_power_of_two() {
+            return Err(Error::Invariant(
+                "direct-I/O block size must be a power of two and at least 4 KiB".to_owned(),
+            ));
+        }
         let path = path.as_ref();
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
@@ -114,11 +129,11 @@ impl DirectIo {
             .mode(0o600)
             .open(path)?;
         let mut length = file.metadata()?.len();
-        if length % PAGE_SIZE as u64 != 0 {
+        if length % BLOCK_SIZE as u64 != 0 {
             // A power loss can leave the final direct-I/O page short. It cannot
             // be referenced by a durable metadata record because data fsync
             // precedes metadata append, so discard only this trailing fragment.
-            length -= length % PAGE_SIZE as u64;
+            length -= length % BLOCK_SIZE as u64;
             file.set_len(length)?;
         }
         let ring = IoUring::new(queue_depth.max(2))?;
@@ -149,7 +164,7 @@ impl DirectIo {
     }
 
     pub(crate) fn truncate(&self, length: u64) -> Result<()> {
-        if length % PAGE_SIZE as u64 != 0 {
+        if length % BLOCK_SIZE as u64 != 0 {
             return Err(Error::Invariant(
                 "direct-I/O truncation must be page aligned".to_owned(),
             ));
@@ -159,13 +174,13 @@ impl DirectIo {
         Ok(())
     }
 
-    pub fn append(&self, page: &AlignedPage) -> Result<u64> {
+    pub fn append(&self, page: &AlignedBlock<BLOCK_SIZE>) -> Result<u64> {
         let offset = self
             .next_offset
-            .fetch_add(PAGE_SIZE as u64, Ordering::AcqRel);
+            .fetch_add(BLOCK_SIZE as u64, Ordering::AcqRel);
         if let Err(error) = self.write_at(offset, page) {
             let _ = self.next_offset.compare_exchange(
-                offset + PAGE_SIZE as u64,
+                offset + BLOCK_SIZE as u64,
                 offset,
                 Ordering::AcqRel,
                 Ordering::Acquire,
@@ -175,8 +190,8 @@ impl DirectIo {
         Ok(offset)
     }
 
-    pub fn write_at(&self, offset: u64, page: &AlignedPage) -> Result<()> {
-        if offset % PAGE_SIZE as u64 != 0 {
+    pub fn write_at(&self, offset: u64, page: &AlignedBlock<BLOCK_SIZE>) -> Result<()> {
+        if offset % BLOCK_SIZE as u64 != 0 {
             return Err(Error::Invariant("unaligned direct write offset".to_owned()));
         }
         // The SQE owns no buffer reference. Clone into request-owned storage so
@@ -186,12 +201,12 @@ impl DirectIo {
         let entry = opcode::Write::new(
             types::Fd(self.file.as_raw_fd()),
             owned_page.as_ptr(),
-            PAGE_SIZE as _,
+            BLOCK_SIZE as _,
         )
         .offset(offset)
         .build()
         .user_data(token);
-        if let Err(error) = self.submit(entry, token, PAGE_SIZE as i32) {
+        if let Err(error) = self.submit(entry, token, BLOCK_SIZE as i32) {
             // A failed io_uring_enter can leave submission state uncertain. The
             // allocation is intentionally leaked so an eventual kernel access
             // can never become a use-after-free. The engine treats the error as
@@ -201,37 +216,37 @@ impl DirectIo {
         }
         self.write_operations.fetch_add(1, Ordering::Relaxed);
         self.bytes_written
-            .fetch_add(PAGE_SIZE as u64, Ordering::Relaxed);
+            .fetch_add(BLOCK_SIZE as u64, Ordering::Relaxed);
         self.next_offset
-            .fetch_max(offset + PAGE_SIZE as u64, Ordering::Release);
+            .fetch_max(offset + BLOCK_SIZE as u64, Ordering::Release);
         Ok(())
     }
 
-    pub fn read(&self, offset: u64) -> Result<AlignedPage> {
-        if offset % PAGE_SIZE as u64 != 0 || offset >= self.len() {
+    pub fn read(&self, offset: u64) -> Result<AlignedBlock<BLOCK_SIZE>> {
+        if offset % BLOCK_SIZE as u64 != 0 || offset >= self.len() {
             return Err(Error::CorruptPage {
                 offset,
                 reason: "read offset is outside the page file".to_owned(),
             });
         }
-        let mut page = AlignedPage::zeroed();
+        let mut page = AlignedBlock::<BLOCK_SIZE>::zeroed();
         let token = self.next_token.fetch_add(1, Ordering::Relaxed);
         let entry = opcode::Read::new(
             types::Fd(self.file.as_raw_fd()),
             page.as_mut_ptr(),
-            PAGE_SIZE as _,
+            BLOCK_SIZE as _,
         )
         .offset(offset)
         .build()
         .user_data(token);
-        if let Err(error) = self.submit(entry, token, PAGE_SIZE as i32) {
+        if let Err(error) = self.submit(entry, token, BLOCK_SIZE as i32) {
             // See write_at: retain uncertain request memory for process life.
             std::mem::forget(page);
             return Err(error);
         }
         self.read_operations.fetch_add(1, Ordering::Relaxed);
         self.bytes_read
-            .fetch_add(PAGE_SIZE as u64, Ordering::Relaxed);
+            .fetch_add(BLOCK_SIZE as u64, Ordering::Relaxed);
         Ok(page)
     }
 
@@ -242,7 +257,7 @@ impl DirectIo {
         expected_result: i32,
     ) -> Result<()> {
         let mut ring = self.ring.lock();
-        // SAFETY: pointers in entries refer to AlignedPage buffers that remain
+        // SAFETY: pointers in entries refer to AlignedBlock buffers that remain
         // alive until submit_and_wait and completion consumption return.
         unsafe {
             ring.submission()

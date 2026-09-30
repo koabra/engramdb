@@ -20,5 +20,5 @@ pub use branch::{Branch, Engine, FaultPoint, MergeOutcome, TemporalRecord, Trans
 pub use buffer_pool::{BufferPool, BufferPoolStats, Page};
 pub use error::{Error, Result};
 pub use hazard::{HazardAtomic, HazardDomain, HazardGuard};
-pub use io::{AlignedPage, DirectIo, IoStats, PAGE_SIZE};
+pub use io::{AlignedBlock, AlignedPage, DirectIo, IoStats, FUSED_BLOCK_SIZE, PAGE_SIZE};
 pub use tree::{Hash, NodeRef};
