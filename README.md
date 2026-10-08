@@ -4,6 +4,11 @@ EngramDB Phase 4 is a Linux-only prototype that combines content-addressed,
 copy-on-write storage with fused vector/graph/temporal blocks, EnQL, Arrow
 Flight sessions, and branch-scoped LLM KV-cache persistence.
 
+For an implementation-level component map, exact Python/Rust workflows,
+real-world scenarios, replacement comparisons, and production-readiness
+boundaries, see
+[`docs/architecture-and-use-cases.md`](docs/architecture-and-use-cases.md).
+
 ## Storage model
 
 - 4 KiB aligned pages use Linux `O_DIRECT` and are submitted through
