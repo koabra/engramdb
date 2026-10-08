@@ -19,7 +19,7 @@ terms negotiated with the copyright holder. Contact:
 
 - Bostrix Inc
 - Email: license-engramdb@bostrix.com
-- Repository owner: [koabra/engramdb](https://github.com/koabra/engramdb)
+- Repository: [koabra/engramdb](https://github.com/koabra/engramdb)
 
 Do not rely on this repository's public source for commercial
 deployments until a commercial license is signed.
