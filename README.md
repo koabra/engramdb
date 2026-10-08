@@ -9,6 +9,19 @@ real-world scenarios, replacement comparisons, and production-readiness
 boundaries, see
 [`docs/architecture-and-use-cases.md`](docs/architecture-and-use-cases.md).
 
+## License
+
+EngramDB is source-available under the
+[PolyForm Noncommercial License 1.0.0](LICENSE).
+
+- Free for permitted noncommercial use, including personal research,
+  experiment, and testing.
+- Commercial use requires a separate paid or royalty-bearing license.
+  See [`COMMERCIAL-LICENSE.md`](COMMERCIAL-LICENSE.md).
+
+This is intentionally **not** an OSI-approved open-source license: the
+public grant does not allow commercial use without a commercial agreement.
+
 ## Storage model
 
 - 4 KiB aligned pages use Linux `O_DIRECT` and are submitted through
