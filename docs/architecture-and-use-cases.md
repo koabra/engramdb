@@ -180,6 +180,11 @@ The global approximate index is a deterministic HNSW graph. A durable
 checkpoint stores node-to-block references and HNSW neighbors. A branch stores
 the checkpoint's content hash, offset, and length as its hybrid root.
 
+Hybrid node IDs are insert-only within a branch checkpoint: inserting a
+duplicate ID is rejected, and no update/delete API exists. Edge weights are
+stored and exported but current traversal uses only target and optional edge
+type; it does not rank or filter by weight.
+
 Pure nearest-neighbor EnQL uses HNSW. A tri-modal query can use:
 
 - **graph first**: bounded breadth-first traversal, then vector and temporal
